@@ -1,0 +1,46 @@
+[package]
+name = "git-repostats"
+version = "0.1.0"
+description = "Fast Git analytics tool powered by Rust, providing detailed author contribution statistics including commits, lines of code, insertions, deletions, and churn."
+edition = "2024"
+repository = "https://github.com/kishorninawe/git-repostats"
+license-file = "LICENSE"
+include = [
+    "Cargo.toml",
+    "LICENSE",
+    "pyproject.toml",
+    "README.md",
+    "rust-toolchain.toml",
+    "python",
+    "src",
+    "!__pycache__",
+    "!.venv/**",
+]
+resolver = "2"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
+debug = false
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+
+[dependencies]
+clap = { version = "4.6.1", default-features = false, features = ["std", "help", "usage", "suggestions", "derive"] }
+console = { version = "0.16.3", default-features = false, features = ["ansi-parsing", "std"] }
+indicatif = "0.18.4"
+num-format = { version = "0.4.4", default-features = false, features = ["std"]}
+rayon = "1.12.0"
+regex = { version = "1.12.3", default-features = false, features = ["std", "unicode-perl", "unicode-case"] }
+tabled = { version = "0.20.0", default-features = false, features = ["derive"] }
+
+[package.metadata.dist]
+dist = true
+
+[[bin]]
+name = "git-repostats"
+path = "src/main.rs"

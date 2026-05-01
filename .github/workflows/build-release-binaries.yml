@@ -1,0 +1,296 @@
+# Build binary on all platforms.
+#
+# Generates both wheels (for PyPI) and archived binaries (for GitHub releases).
+#
+# Called from:
+# - .github/workflows/release.yml (as a local artifacts job within `cargo-dist`)
+name: "Build release binaries"
+
+on:
+  workflow_call:
+    inputs:
+      plan:
+        required: false
+        type: string
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PROJECT_NAME: git-repostats
+  PACKAGE_NAME: git_repostats
+  BIN_NAME: git-repostats
+  PYTHON_VERSION: "3.11"
+  CARGO_INCREMENTAL: 0
+  CARGO_NET_RETRY: 10
+  CARGO_TERM_COLOR: always
+  RUSTUP_MAX_RETRIES: 10
+
+# permissions: {}
+permissions:
+  "contents": "read"
+
+jobs:
+  sdist:
+    name: sdist
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: "Build sdist"
+        uses: PyO3/maturin-action@v1.51.0
+        with:
+          maturin-version: v1.13.1
+          command: sdist
+          args: --out dist
+      - name: "Test sdist"
+        run: |
+          # We can't use `--find-links` here, since we need maturin, which means no `--no-index`, and without that option
+          # we run the risk that pip pull uv from PyPI instead.
+          pip install dist/${PACKAGE_NAME}-*.tar.gz --force-reinstall
+          ${BIN_NAME} --help
+          python -m ${PACKAGE_NAME} --help
+      - name: "Upload sdist"
+        uses: actions/upload-artifact@v7
+        with:
+          name: wheels_${{ env.PROJECT_NAME }}-sdist
+          path: dist
+
+  macos:
+    name: ${{ matrix.platform.target }}
+    runs-on: ${{ matrix.platform.os }}
+    strategy:
+      matrix:
+        platform:
+          - target: x86_64-apple-darwin
+            arch: x64
+            os: macos-15-intel
+          - target: aarch64-apple-darwin
+            arch: arm64
+            os: macos-15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          architecture: ${{ matrix.platform.arch }}
+      - name: "Build wheel"
+        uses: PyO3/maturin-action@v1.51.0
+        with:
+          maturin-version: v1.13.1
+          target: ${{ matrix.platform.target }}
+          args: --release --locked --out dist --compatibility pypi
+      - name: "Test wheel"
+        shell: bash
+        run: |
+          ls -ls
+          pip install ${PROJECT_NAME} --no-index --find-links dist/ --force-reinstall
+          ${BIN_NAME} --help
+          python -m ${PACKAGE_NAME} --help
+      - name: "Upload wheel"
+        uses: actions/upload-artifact@v7
+        with:
+          name: wheels_${{ env.PROJECT_NAME }}-${{ matrix.platform.target }}
+          path: dist
+      - name: "Archive binary"
+        shell: bash
+        run: |
+          ARCHIVE_NAME=${PROJECT_NAME}-${PLATFORM_TARGET}
+          ARCHIVE_FILE=${ARCHIVE_NAME}.tar.gz
+
+          mkdir -p $ARCHIVE_NAME
+          cp target/${PLATFORM_TARGET}/release/${BIN_NAME} $ARCHIVE_NAME/${BIN_NAME}
+          tar czvf $ARCHIVE_FILE $ARCHIVE_NAME
+          shasum -a 256 $ARCHIVE_FILE > $ARCHIVE_FILE.sha256
+        env:
+          PLATFORM_TARGET: ${{ matrix.platform.target }}
+      - name: "Upload binary"
+        uses: actions/upload-artifact@v7
+        with:
+          name: artifacts-${{ matrix.platform.target }}
+          path: |
+            *.tar.gz
+            *.sha256
+
+  linux:
+    name: ${{ matrix.platform.target }}-${{ matrix.platform.manylinux }}
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        platform:
+          - target: x86_64-unknown-linux-gnu
+            arch: x64
+            manylinux: 2_17
+          - target: x86_64-unknown-linux-gnu
+            arch: x64
+            manylinux: 2_28
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          architecture: ${{ matrix.platform.arch }}
+      - name: "Build wheel"
+        uses: PyO3/maturin-action@v1.51.0
+        with:
+          maturin-version: v1.13.1
+          target: ${{ matrix.platform.target }}
+          manylinux: ${{ matrix.platform.manylinux }}
+          args: --release --locked --out dist --compatibility pypi
+      - name: "Test wheel"
+        shell: bash
+        run: |
+          ls -ls
+          pip install ${PROJECT_NAME} --no-index --find-links dist/ --force-reinstall
+          ${BIN_NAME} --help
+          python -m ${PACKAGE_NAME} --help
+      - name: "Upload wheel"
+        uses: actions/upload-artifact@v7
+        with:
+          name: wheels_${{ env.PROJECT_NAME }}-${{ matrix.platform.target }}-manylinux-${{ matrix.platform.manylinux }}
+          path: dist
+      - name: "Archive binary"
+        shell: bash
+        run: |
+          ARCHIVE_NAME=${PROJECT_NAME}-${PLATFORM_TARGET}
+          if [ "${PLATFORM_MANYLINUX}" = "2_17" ]; then
+            ARCHIVE_FILE=${ARCHIVE_NAME}.tar.gz
+          else
+            ARCHIVE_FILE=${ARCHIVE_NAME}-manylinux-${PLATFORM_MANYLINUX}.tar.gz
+          fi
+
+          mkdir -p $ARCHIVE_NAME
+          cp target/${PLATFORM_TARGET}/release/${BIN_NAME} $ARCHIVE_NAME/${BIN_NAME}
+          tar czvf $ARCHIVE_FILE $ARCHIVE_NAME
+          shasum -a 256 $ARCHIVE_FILE > $ARCHIVE_FILE.sha256
+        env:
+          PLATFORM_TARGET: ${{ matrix.platform.target }}
+          PLATFORM_MANYLINUX: ${{ matrix.platform.manylinux }}
+      - name: "Upload binary"
+        uses: actions/upload-artifact@v7
+        with:
+          name: artifacts-${{ matrix.platform.target }}${{ matrix.platform.manylinux != '2_17' && format('-manylinux-{0}', matrix.platform.manylinux) || '' }}
+          path: |
+            *.tar.gz
+            *.sha256
+
+  linux-arm:
+    name: ${{ matrix.platform.target }}-${{ matrix.platform.manylinux }}
+    runs-on: ubuntu-24.04-arm
+    strategy:
+      matrix:
+        platform:
+          - target: aarch64-unknown-linux-gnu
+            arch: arm64
+            manylinux: 2_17
+          - target: aarch64-unknown-linux-gnu
+            arch: arm64
+            manylinux: 2_28
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          architecture: ${{ matrix.platform.arch }}
+      - name: "Build wheel"
+        uses: PyO3/maturin-action@v1.51.0
+        with:
+          maturin-version: v1.13.1
+          target: ${{ matrix.platform.target }}
+          manylinux: ${{ matrix.platform.manylinux }}
+          args: --release --locked --out dist --compatibility pypi
+      - name: "Test wheel"
+        shell: bash
+        run: |
+          pip install ${PROJECT_NAME} --no-index --find-links dist/ --force-reinstall
+          ${BIN_NAME} --help
+          python -m ${PACKAGE_NAME} --help
+      - name: "Upload wheel"
+        uses: actions/upload-artifact@v7
+        with:
+          name: wheels_${{ env.PROJECT_NAME }}-${{ matrix.platform.target }}-manylinux-${{ matrix.platform.manylinux }}
+          path: dist
+      - name: "Archive binary"
+        shell: bash
+        run: |
+          ARCHIVE_NAME=${PROJECT_NAME}-${PLATFORM_TARGET}
+          if [ "${PLATFORM_MANYLINUX}" = "2_17" ]; then
+            ARCHIVE_FILE=${ARCHIVE_NAME}.tar.gz
+          else
+            ARCHIVE_FILE=${ARCHIVE_NAME}-manylinux-${PLATFORM_MANYLINUX}.tar.gz
+          fi
+
+          mkdir -p $ARCHIVE_NAME
+          cp target/${PLATFORM_TARGET}/release/${BIN_NAME} $ARCHIVE_NAME/${BIN_NAME}
+          tar czvf $ARCHIVE_FILE $ARCHIVE_NAME
+          shasum -a 256 $ARCHIVE_FILE > $ARCHIVE_FILE.sha256
+        env:
+          PLATFORM_TARGET: ${{ matrix.platform.target }}
+          PLATFORM_MANYLINUX: ${{ matrix.platform.manylinux }}
+      - name: "Upload binary"
+        uses: actions/upload-artifact@v7
+        with:
+          name: artifacts-${{ matrix.platform.target }}${{ matrix.platform.manylinux != '2_17' && format('-manylinux-{0}', matrix.platform.manylinux) || '' }}
+          path: |
+            *.tar.gz
+            *.sha256
+
+  windows:
+    name: ${{ matrix.platform.target }}
+    runs-on: windows-2025
+    strategy:
+      matrix:
+        platform:
+          - target: x86_64-pc-windows-msvc
+            arch: x64
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          architecture: ${{ matrix.platform.arch }}
+      - name: "Build wheel"
+        uses: PyO3/maturin-action@v1.51.0
+        with:
+          maturin-version: v1.13.1
+          target: ${{ matrix.platform.target }}
+          args: --release --locked --out dist --compatibility pypi
+      - name: "Test wheel"
+        shell: bash
+        run: |
+          pip install ${PROJECT_NAME} --no-index --find-links dist/ --force-reinstall
+          ${BIN_NAME} --help
+          python -m ${PACKAGE_NAME} --help
+      - name: "Upload wheel"
+        uses: actions/upload-artifact@v7
+        with:
+          name: wheels_${{ env.PROJECT_NAME }}-${{ matrix.platform.target }}
+          path: dist
+      - name: "Archive binary"
+        shell: bash
+        run: |
+          ARCHIVE_FILE=${PROJECT_NAME}-${PLATFORM_TARGET}.zip
+          7z a $ARCHIVE_FILE ./target/${PLATFORM_TARGET}/release/${BIN_NAME}.exe
+          sha256sum $ARCHIVE_FILE > $ARCHIVE_FILE.sha256
+        env:
+          PLATFORM_TARGET: ${{ matrix.platform.target }}
+      - name: "Upload binary"
+        uses: actions/upload-artifact@v7
+        with:
+          name: artifacts-${{ matrix.platform.target }}
+          path: |
+            *.zip
+            *.sha256

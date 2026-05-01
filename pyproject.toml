@@ -1,0 +1,39 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "git-repostats"
+version = "0.1.0"
+authors = [
+  { name="Kishor Ninawe" },
+]
+description = "Fast Git analytics tool powered by Rust, providing detailed author contribution statistics including commits, lines of code, insertions, deletions, and churn."
+readme = "README.md"
+requires-python = ">=3.9"
+classifiers = [
+    "Environment :: Console",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3.15"
+]
+license = "MIT"
+license-files = ["LICENSE"]
+
+[project.urls]
+Homepage = "https://github.com/kishorninawe/git-repostats"
+Releases = "https://github.com/kishorninawe/git-repostats/releases"
+Repository = "https://github.com/kishorninawe/git-repostats"
+
+[tool.maturin]
+python-source = "python"
+module-name = "git_repostats"
+bindings = "bin"
+strip = true
