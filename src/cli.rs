@@ -100,6 +100,21 @@ pub struct Args {
 
     #[arg(
         long,
+        help = "Include only merge commits.",
+        long_help = "Include only merge commits (commits with two or more parents) for commits, files, and history metrics. Equivalent to Git's --min-parents=2."
+    )]
+    pub merges: bool,
+
+    #[arg(
+        long,
+        help = "Include only non-merge commits.",
+        long_help = "Include only non-merge commits (commits with at most one parent) for commits, files, and history metrics. Equivalent to Git's --max-parents=1.",
+        conflicts_with = "merges"
+    )]
+    pub no_merges: bool,
+
+    #[arg(
+        long,
         default_value_t = 0,
         help = "Number of parallel git operations. 0 = auto (min(CPU cores, 4))."
     )]
