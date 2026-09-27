@@ -1,23 +1,21 @@
 pub mod cli;
+pub mod error;
 pub mod git;
 pub mod process;
 pub mod render;
 pub mod stats;
 pub mod utils;
 
-use crate::cli::Args;
-use crate::process::process_repo;
-use crate::render::render_all;
-use crate::stats::AuthorStats;
 use std::collections::HashMap;
-use std::io;
 
-pub fn run(args: Args) -> io::Result<()> {
-    let mut result: HashMap<String, Vec<(String, AuthorStats)>> = HashMap::new();
+use crate::{cli::Args, error::AppError, process::process_repo, render::render_all};
+
+pub fn run(args: Args) -> Result<(), AppError> {
+    let mut result = HashMap::with_capacity(args.gitdir.len());
 
     for dir in &args.gitdir {
-        let rows = process_repo(dir, &args);
-        result.insert(dir.clone(), rows);
+        let (repo_name, rows) = process_repo(dir, &args)?;
+        result.insert(repo_name, rows);
     }
 
     render_all(&args, result);

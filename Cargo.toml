@@ -37,6 +37,7 @@ num-format = { version = "0.4.4", default-features = false, features = ["std"]}
 rayon = "1.12.0"
 regex = { version = "1.13.1", default-features = false, features = ["std", "unicode-perl", "unicode-case"] }
 tabled = { version = "0.22.0", default-features = false, features = ["derive"] }
+thiserror = "2.0.21"
 
 [package.metadata.dist]
 dist = true

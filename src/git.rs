@@ -1,232 +1,321 @@
-use crate::cli::{Args, ShowAuthor};
-use crate::stats::{AuthorCurrentStats, AuthorHistoryStats};
-use crate::utils::{push_flag, push_opt_arg};
 use indicatif::ProgressBar;
-use rayon::prelude::*;
+use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use regex::Regex;
-use std::collections::{HashMap, HashSet};
-use std::process::Command;
+use std::{
+    collections::{HashMap, HashSet},
+    path::Path,
+    process::Command,
+    sync::LazyLock,
+};
 
-pub fn git_list_files(dir: &str, args: &Args) -> HashSet<String> {
-    let out = Command::new("git")
-        .arg("-C")
+use crate::{
+    cli::{Args, ShowAuthor},
+    error::GitError,
+    stats::{AuthorCurrentStats, AuthorHistoryStats},
+    utils::{push_flag, push_opt_arg},
+};
+
+static SHORTLOG_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?m)^\s*(?P<commit>\d+)\s+(?P<name>.*)\s+<(?P<email>[^>]+)>$").unwrap()
+});
+
+static LOG_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^aN:(?P<name>.+?) aE:(?P<email>.*?)$").unwrap());
+
+static BLAME_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"(?mi)^[0-9a-f]{40} \d+ \d+ (?P<num_lines>\d+)\nauthor (?P<name>.+)\nauthor-mail <(?P<email>.+)>$"
+    )
+    .unwrap()
+});
+
+pub fn git_list_files(dir: &Path, args: &Args) -> Result<HashSet<String>, GitError> {
+    let mut cmd = Command::new("git");
+
+    cmd.arg("-C")
         .arg(dir)
-        .args(["grep", "-I", "--name-only", ".", &args.branch])
-        .output()
-        .expect("git grep failed");
+        .args(["grep", "--no-color", "-I", "--name-only", "."])
+        .arg(&args.branch);
 
-    String::from_utf8_lossy(&out.stdout)
+    // Git executable couldn't be started.
+    let out = cmd.output().map_err(|source| GitError::Io {
+        command: format!("git grep"),
+        source,
+    })?;
+
+    // Git started but returned an error.
+    if !out.status.success() {
+        return Err(GitError::CommandFailed {
+            command: format!("git grep"),
+            status: out.status.code().unwrap_or(-1),
+            stderr: String::from_utf8_lossy(&out.stderr).trim().to_owned(),
+        });
+    }
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+
+    let prefix = format!("{}:", args.branch);
+
+    let result = stdout
         .lines()
+        .map(|line| line.strip_prefix(&prefix).unwrap_or(line)) // Remove "<branch>:" prefix if present
         .map(str::trim) // strip whitespace
-        .filter(|l| !l.is_empty()) // ignore empty lines
-        .map(|l| {
-            // Remove "<branch>:" prefix if present
-            l.strip_prefix(&format!("{}:", args.branch))
-                .unwrap_or(l)
-                .to_string()
-        })
-        .collect()
+        .filter(|line| !line.is_empty()) // ignore empty lines
+        .map(str::to_owned)
+        .collect();
+
+    Ok(result)
 }
 
 pub fn git_shortlog(
-    dir: &str,
+    dir: &Path,
     args: &Args,
     repo_pb: &ProgressBar,
-    git_pb: &ProgressBar,
-) -> HashMap<String, usize> {
-    git_pb.set_message("git shortlog …");
-
+) -> Result<HashMap<String, usize>, GitError> {
     let mut cmd = Command::new("git");
+
     cmd.arg("-C")
         .arg(dir)
         .args(["shortlog", "-s", "-e", "--no-merges"]);
+
     push_opt_arg(&mut cmd, "--since", args.since.as_deref());
     push_opt_arg(&mut cmd, "--until", args.until.as_deref());
+
     cmd.arg(&args.branch);
 
-    let out = cmd.output().expect("git shortlog failed");
+    // Git executable couldn't be started.
+    let out = cmd.output().map_err(|source| GitError::Io {
+        command: format!("git shortlog"),
+        source,
+    })?;
+
+    // Git started but returned an error.
+    if !out.status.success() {
+        return Err(GitError::CommandFailed {
+            command: format!("git shortlog"),
+            status: out.status.code().unwrap_or(-1),
+            stderr: String::from_utf8_lossy(&out.stderr).trim().to_owned(),
+        });
+    }
+
     let stdout = String::from_utf8_lossy(&out.stdout);
 
-    let re = Regex::new(r"(?m)^\s*(?P<commit>\d+)\s+(?P<name>.*)\s+<(?P<email>[^>]+)>$").unwrap();
-    let mut result = HashMap::new();
+    let mut result: HashMap<String, usize> = HashMap::new();
 
-    for caps in re.captures_iter(&stdout) {
-        let commit_count: usize = caps["commit"].parse().unwrap_or(0);
+    for caps in SHORTLOG_RE.captures_iter(&stdout) {
+        let commit_count = caps["commit"].parse::<usize>().unwrap_or(0);
         let name = caps["name"].trim();
         let email = caps["email"].trim();
 
         let author = match args.show {
-            ShowAuthor::Name => name.to_string(),
-            ShowAuthor::Email => email.to_string(),
+            ShowAuthor::Name => name.to_owned(),
+            ShowAuthor::Email => email.to_owned(),
             ShowAuthor::Both => format!("{} <{}>", name, email),
         };
 
-        result.insert(author, commit_count);
+        *result.entry(author).or_default() += commit_count;
     }
 
     repo_pb.inc(1);
 
-    result
+    Ok(result)
 }
 
 pub fn git_log(
-    dir: &str,
+    dir: &Path,
     args: &Args,
     allowed_files: &HashSet<String>,
     repo_pb: &ProgressBar,
-    git_pb: &ProgressBar,
-) -> HashMap<String, AuthorHistoryStats> {
-    git_pb.set_message("git log …");
-
+) -> Result<HashMap<String, AuthorHistoryStats>, GitError> {
     let mut cmd = Command::new("git");
+
     cmd.arg("-C").arg(dir).args([
         "log",
-        "--format=aN:%aN aE:%aE ct:%ct",
+        "--no-color",
+        "--format=aN:%aN aE:%aE",
         "--no-merges",
         "--numstat",
     ]);
+
     push_opt_arg(&mut cmd, "--since", args.since.as_deref());
     push_opt_arg(&mut cmd, "--until", args.until.as_deref());
+
     push_flag(&mut cmd, "-w", args.ignore_whitespace);
     push_flag(&mut cmd, "-M", args.detect_moves);
     push_flag(&mut cmd, "-C", args.detect_copies);
+
     cmd.arg(&args.branch);
 
-    let out = cmd.output().expect("git log failed");
-    let header_re = Regex::new(r"^aN:(?P<name>.+?) aE:(?P<email>.*?) ct:(?P<ts>\d+)$").unwrap();
+    // Git executable couldn't be started.
+    let out = cmd.output().map_err(|source| GitError::Io {
+        command: format!("git log"),
+        source,
+    })?;
+
+    // Git started but returned an error.
+    if !out.status.success() {
+        return Err(GitError::CommandFailed {
+            command: format!("git log"),
+            status: out.status.code().unwrap_or(-1),
+            stderr: String::from_utf8_lossy(&out.stderr).trim().to_owned(),
+        });
+    }
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
 
     let mut result: HashMap<String, AuthorHistoryStats> = HashMap::new();
+
     let mut current_author: Option<String> = None;
 
-    for line in String::from_utf8_lossy(&out.stdout).lines() {
+    for line in stdout.lines() {
         let line = line.trim();
+
         if line.is_empty() {
             continue;
         }
 
-        // Commit header
-        if let Some(caps) = header_re.captures(line) {
+        if let Some(caps) = LOG_RE.captures(line) {
             let name = &caps["name"];
             let email = &caps["email"];
+
             let author = match args.show {
-                ShowAuthor::Name => name.to_string(),
-                ShowAuthor::Email => email.to_string(),
-                ShowAuthor::Both => format!("{} <{}>", name, email),
+                ShowAuthor::Name => name.to_owned(),
+                ShowAuthor::Email => email.to_owned(),
+                ShowAuthor::Both => format!("{name} <{email}>"),
             };
 
-            let _entry = result.entry(author.clone()).or_default();
-
+            result.entry(author.clone()).or_default();
             current_author = Some(author);
+
             continue;
         }
 
-        // Numstat line
-        if let Some(author) = &current_author {
-            let parts: Vec<&str> = line.split('\t').collect();
-            let file = parts[2];
+        let Some(author) = &current_author else {
+            continue;
+        };
 
-            if parts.len() == 3 {
-                // Skip binary files
-                if parts[0] == "-" || parts[1] == "-" {
-                    continue;
-                }
+        let Some((ins_str, rest)) = line.split_once('\t') else {
+            continue;
+        };
 
-                // Skip files not in allowed list
-                if !allowed_files.contains(file) {
-                    continue;
-                }
+        let Some((del_str, file)) = rest.split_once('\t') else {
+            continue;
+        };
 
-                let ins = parts[0].parse::<usize>().unwrap_or(0);
-                let del = parts[1].parse::<usize>().unwrap_or(0);
-
-                let entry = result.get_mut(author).unwrap();
-                entry.ins += ins;
-                entry.del += del;
-                entry.churn += ins + del;
-                entry.net += ins as isize - del as isize;
-                entry.files.insert(file.to_string());
-            }
+        // Skip binary files.
+        if ins_str == "-" || del_str == "-" {
+            continue;
         }
+
+        // Skip files not in allowed list.
+        if !allowed_files.contains(file) {
+            continue;
+        }
+
+        let ins = ins_str.parse::<usize>().unwrap_or(0);
+        let del = del_str.parse::<usize>().unwrap_or(0);
+
+        let entry = result.get_mut(author).unwrap();
+
+        entry.ins += ins;
+        entry.del += del;
+        entry.churn += ins + del;
+        entry.net += ins as isize - del as isize;
+        entry.files.insert(file.to_owned());
     }
 
     repo_pb.inc(1);
 
-    result
+    Ok(result)
 }
 
 pub fn git_blame(
-    dir: &str,
+    dir: &Path,
     args: &Args,
     files: &HashSet<String>,
     repo_pb: &ProgressBar,
-    git_pb: &ProgressBar,
-) -> HashMap<String, AuthorCurrentStats> {
+) -> Result<HashMap<String, AuthorCurrentStats>, GitError> {
     files
         .par_iter()
-        .map(|file| {
-            // Progress message (thread-safe)
-            git_pb.set_message(format!("git blame {} …", file));
+        .try_fold(
+            HashMap::new,
+            |mut local: HashMap<String, AuthorCurrentStats>, file| {
+                let file_stats = git_blame_file(dir, args, file)?;
 
-            // Run blame for ONE file
-            let file_stats = git_blame_file(dir, args, file);
+                repo_pb.inc(1);
 
-            // Update repo progress
-            repo_pb.inc(1);
+                for (author, stats) in file_stats {
+                    let entry = local.entry(author).or_default();
 
-            // Build a LOCAL HashMap
-            let mut local: HashMap<String, AuthorCurrentStats> = HashMap::new();
+                    entry.files.insert(file.clone());
+                    entry.surviving += stats.surviving;
+                }
 
-            for (author, stats) in file_stats {
-                let entry = local.entry(author).or_default();
-                entry.files.insert(file.clone());
-                entry.surviving += stats.surviving;
-            }
-
-            local
-        })
-        // Reduce: merge all local HashMaps
-        .reduce(HashMap::new, |mut acc, local| {
+                Ok(local)
+            },
+        )
+        .try_reduce(HashMap::new, |mut acc, local| {
             for (author, stats) in local {
                 let entry = acc.entry(author).or_default();
+
                 entry.files.extend(stats.files);
                 entry.surviving += stats.surviving;
             }
-            acc
+
+            Ok(acc)
         })
 }
 
-fn git_blame_file(dir: &str, args: &Args, file: &str) -> HashMap<String, AuthorCurrentStats> {
+fn git_blame_file(
+    dir: &Path,
+    args: &Args,
+    file: &str,
+) -> Result<HashMap<String, AuthorCurrentStats>, GitError> {
     let mut cmd = Command::new("git");
+
     cmd.arg("-C").arg(dir).args(["blame", "--line-porcelain"]);
+
     push_opt_arg(&mut cmd, "--since", args.since.as_deref());
     push_opt_arg(&mut cmd, "--until", args.until.as_deref());
+
     push_flag(&mut cmd, "-w", args.ignore_whitespace);
     push_flag(&mut cmd, "-M", args.detect_moves);
     push_flag(&mut cmd, "-C", args.detect_copies);
 
     cmd.arg(&args.branch).arg(file);
 
-    let out = cmd.output().expect("git blame failed");
+    // Git executable couldn't be started.
+    let out = cmd.output().map_err(|source| GitError::Io {
+        command: format!("git blame"),
+        source,
+    })?;
 
-    let re = Regex::new(
-    r"(?mi)^[0-9a-f]{40} \d+ \d+ (?P<num_lines>\d+)\nauthor (?P<name>.+)\nauthor-mail <(?P<email>.+)>$"
-    ).unwrap();
+    // Git started but returned an error.
+    if !out.status.success() {
+        return Err(GitError::CommandFailed {
+            command: format!("git blame"),
+            status: out.status.code().unwrap_or(-1),
+            stderr: String::from_utf8_lossy(&out.stderr).trim().to_owned(),
+        });
+    }
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
 
     let mut result: HashMap<String, AuthorCurrentStats> = HashMap::new();
 
-    for caps in re.captures_iter(&String::from_utf8_lossy(&out.stdout)) {
-        let num_lines: usize = caps["num_lines"].parse().unwrap();
+    for caps in BLAME_RE.captures_iter(&stdout) {
+        let num_lines = caps["num_lines"].parse::<usize>().unwrap_or(0);
         let name = &caps["name"];
         let email = &caps["email"];
+
         let author = match args.show {
-            ShowAuthor::Name => name.to_string(),
-            ShowAuthor::Email => email.to_string(),
-            ShowAuthor::Both => format!("{} <{}>", name, email),
+            ShowAuthor::Name => name.to_owned(),
+            ShowAuthor::Email => email.to_owned(),
+            ShowAuthor::Both => format!("{name} <{email}>"),
         };
 
-        let entry = result.entry(author).or_default();
-        entry.surviving += num_lines;
+        result.entry(author).or_default().surviving += num_lines;
     }
 
-    result
+    Ok(result)
 }
