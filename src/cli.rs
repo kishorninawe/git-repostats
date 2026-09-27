@@ -1,17 +1,18 @@
-use crate::utils::{validate_git_dir, parse_limit};
 use clap::{Parser, ValueEnum};
-use std::fmt;
+use std::{fmt, path::PathBuf};
+
+use crate::utils::{parse_limit, validate_git_dir};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about)]
 pub struct Args {
     #[arg(
         default_value = ".", 
-        num_args = 1..,        
+        num_args = 1..,
         value_parser = validate_git_dir,
         help = "Git repository directory or directories to analyze."
     )]
-    pub gitdir: Vec<String>,
+    pub gitdir: Vec<PathBuf>,
 
     #[arg(
         long,
@@ -168,11 +169,10 @@ pub enum Limit {
     Count(usize),
 }
 
-
 impl fmt::Display for SortKey {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let s = format!("{:?}", self);
-       
+
         let first = &s[..1].to_uppercase();
         let rest = &s[1..].to_lowercase();
 

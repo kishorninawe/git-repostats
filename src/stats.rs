@@ -1,5 +1,6 @@
-use std::collections::HashSet;
-use std::ops::Add;
+use std::{collections::HashSet, ops::Add};
+
+use crate::cli::Metrics;
 
 #[derive(Default, Debug)]
 pub struct AuthorHistoryStats {
@@ -25,6 +26,37 @@ pub struct AuthorStats {
     pub del: Option<usize>,
     pub net: Option<isize>,
     pub churn: Option<usize>,
+}
+
+impl AuthorStats {
+    pub fn for_metrics(metrics: &[Metrics]) -> Self {
+        let mut stats = Self::default();
+
+        for metric in metrics {
+            match metric {
+                Metrics::Commits => stats.commits = Some(0),
+                Metrics::Files => stats.files = Some(0),
+                Metrics::Current => stats.surviving = Some(0),
+                Metrics::History => {
+                    stats.ins = Some(0);
+                    stats.del = Some(0);
+                    stats.net = Some(0);
+                    stats.churn = Some(0);
+                }
+                Metrics::All => {
+                    stats.commits = Some(0);
+                    stats.files = Some(0);
+                    stats.surviving = Some(0);
+                    stats.ins = Some(0);
+                    stats.del = Some(0);
+                    stats.net = Some(0);
+                    stats.churn = Some(0);
+                }
+            }
+        }
+
+        stats
+    }
 }
 
 impl Add for AuthorStats {

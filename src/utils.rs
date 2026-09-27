@@ -1,30 +1,35 @@
-use crate::cli::{Args, Limit, Metrics, SortKey as Sort};
-use crate::stats::AuthorStats;
 use console::style;
 use num_format::{Locale, ToFormattedString};
-use std::collections::HashSet;
-use std::io;
-use std::path::PathBuf;
-use std::process::Command;
+use std::{collections::HashSet, io, path::PathBuf, process::Command};
+
+use crate::{
+    cli::{Args, Limit, Metrics, SortKey as Sort},
+    stats::AuthorStats,
+};
 
 /// Validate that a path:
 /// - exists
 /// - is a directory
 /// - is a git repository
-pub fn validate_git_dir(path: &str) -> Result<String, String> {
+pub fn validate_git_dir(path: &str) -> Result<PathBuf, String> {
     let path = PathBuf::from(path);
 
-    // 1. Exists
+    // 1. Canonicalize the path to resolve symlinks and get an absolute path
+    let path = path
+        .canonicalize()
+        .map_err(|e| format!("invalid git directory '{}': {}", path.display(), e))?;
+
+    // 2. Exists
     if !path.exists() {
         return Err(format!("path does not exist: {}", path.display()));
     }
 
-    // 2. Is directory
+    // 3. Is directory
     if !path.is_dir() {
         return Err(format!("path is not a directory: {}", path.display()));
     }
 
-    // 3. Is git repository (.git directory or file)
+    // 4. Is git repository (.git directory or file)
     let git_dir = path.join(".git");
     if !git_dir.exists() {
         return Err(format!(
@@ -33,11 +38,11 @@ pub fn validate_git_dir(path: &str) -> Result<String, String> {
         ));
     }
 
-    // 4. Is valid git repository
+    // 5. Is valid git repository
     check_output(&[
         "git",
         "-C",
-        &path.to_string_lossy().to_string(),
+        path.to_string_lossy().as_ref(),
         "rev-parse",
         "--git-dir",
     ])
@@ -49,31 +54,22 @@ pub fn validate_git_dir(path: &str) -> Result<String, String> {
         )
     })?;
 
-    Ok(path.to_string_lossy().to_string())
+    Ok(path)
 }
 
-pub fn parse_metrics(metrics: Vec<Metrics>) -> Vec<Metrics> {
-    let mut out = Vec::new();
-    let mut seen = HashSet::new();
+pub fn parse_metrics(metrics: &[Metrics]) -> Vec<Metrics> {
+    let unique: HashSet<_> = metrics.iter().copied().collect();
 
-    for m in metrics {
-        if m == Metrics::All {
-            for m2 in [
-                Metrics::Commits,
-                Metrics::Files,
-                Metrics::History,
-                Metrics::Current,
-            ] {
-                if seen.insert(m2) {
-                    out.push(m2);
-                }
-            }
-        } else if seen.insert(m) {
-            out.push(m);
-        }
+    if unique.contains(&Metrics::All) {
+        return vec![
+            Metrics::Commits,
+            Metrics::Files,
+            Metrics::History,
+            Metrics::Current,
+        ];
     }
 
-    out
+    unique.into_iter().collect()
 }
 
 pub fn parse_limit(s: &str) -> Result<Limit, String> {
@@ -112,14 +108,12 @@ pub fn check_output(argv: &[&str]) -> io::Result<String> {
     let output = Command::new(program).args(args).output()?;
 
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
-            stderr.trim().to_string(),
+        return Err(io::Error::other(
+            String::from_utf8_lossy(&output.stderr).trim(),
         ));
     }
 
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
 }
 
 fn is_sort_valid(sort: Sort, args: &Args) -> bool {
@@ -196,6 +190,6 @@ pub fn sort_value(stats: &AuthorStats, sort: Sort) -> isize {
 pub fn fmt_number<T: ToFormattedString>(n: &Option<T>) -> String {
     match n {
         Some(v) => v.to_formatted_string(&Locale::en),
-        None => "".to_string(),
+        None => "".to_owned(),
     }
 }

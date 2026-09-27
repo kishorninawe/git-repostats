@@ -1,15 +1,19 @@
-use crate::cli::{Args, Limit, Metrics};
-use crate::stats::AuthorStats;
-use crate::utils::fmt_number;
-use std::collections::HashMap;
-use std::io::{self, Write};
-use std::path::Path;
+use std::{
+    collections::HashMap,
+    io::{self, BufWriter, Write},
+};
 use tabled::{
     Table, Tabled,
     settings::{
         Alignment, Format, Modify, Panel, Remove, Style, object::Columns, object::Rows,
         style::HorizontalLine, themes::BorderCorrection,
     },
+};
+
+use crate::{
+    cli::{Args, Limit, Metrics},
+    stats::AuthorStats,
+    utils::fmt_number,
 };
 
 #[derive(Tabled)]
@@ -48,24 +52,24 @@ const METRIC_COLUMNS: &[(Metrics, &[usize])] = &[
 
 fn display_ins(v: &Option<usize>) -> String {
     match *v {
-        None => "".to_string(),
-        Some(0) => "0".to_string(),
+        None => String::new(),
+        Some(0) => "0".to_owned(),
         Some(n) => format!("+{}", fmt_number(&Some(n))),
     }
 }
 
 fn display_del(v: &Option<usize>) -> String {
     match *v {
-        None => "".to_string(),
-        Some(0) => "0".to_string(),
+        None => String::new(),
+        Some(0) => "0".to_owned(),
         Some(n) => format!("-{}", fmt_number(&Some(n))),
     }
 }
 
 fn display_net(v: &Option<isize>) -> String {
     match *v {
-        None => "".to_string(),
-        Some(0) => "0".to_string(),
+        None => String::new(),
+        Some(0) => "0".to_owned(),
         Some(n) if n > 0 => format!("+{}", fmt_number(&Some(n))),
         Some(n) => n.to_string(),
     }
@@ -80,13 +84,7 @@ fn aggregate_stats(rows: &[(String, AuthorStats)]) -> AuthorStats {
 }
 
 pub fn render_all(args: &Args, result: HashMap<String, Vec<(String, AuthorStats)>>) {
-    for (dir, rows) in result {
-        let repo_name: &str = Path::new(&dir)
-            .components()
-            .last()
-            .and_then(|c| c.as_os_str().to_str())
-            .unwrap();
-
+    for (repo_name, rows) in result {
         let limit = match args.limit {
             Limit::All => rows.len(),
             Limit::Count(n) => n,
@@ -127,7 +125,7 @@ pub fn render_all(args: &Args, result: HashMap<String, Vec<(String, AuthorStats)
             ))
         };
 
-        render_table(repo_name, args, final_rows, is_other_row);
+        render_table(&repo_name, args, final_rows, is_other_row);
     }
 }
 
@@ -174,32 +172,38 @@ pub fn render_table(
         (other_sep, HorizontalLine::new('-')),
         (table.count_rows(), HorizontalLine::new('-')),
     ];
+
     let style = Style::empty().horizontals(horizontals);
 
     let mut remove_cols = Vec::new();
+
     for (metric, cols) in METRIC_COLUMNS {
         if !args.metrics.contains(metric) {
             remove_cols.extend_from_slice(cols);
         }
     }
+
     remove_cols.sort_unstable_by(|a, b| b.cmp(a));
+
     for idx in remove_cols {
         table.with(Remove::column(Columns::one(idx)));
     }
 
     table
         .with(style)
-        .with(Panel::header(format!("Repository: {}", repo_name)))
+        .with(Panel::header(format!("Repository: {repo_name}")))
         .with(BorderCorrection::span())
         .with(Modify::new(Columns::new(1..)).with(Alignment::right()))
         .with(Modify::new(Rows::one(1)).with(Format::content(move |s| {
             if sort_key.as_deref() == Some(s) {
-                format!("{}{}", s, arrow)
+                format!("{s}{arrow}")
             } else {
-                s.to_string()
+                s.to_owned()
             }
         })));
 
-    let mut out = io::stdout().lock();
+    let stdout = io::stdout().lock();
+    let mut out = BufWriter::new(stdout);
     writeln!(out, "{table}").unwrap();
+    out.flush().unwrap();
 }
