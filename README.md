@@ -84,6 +84,9 @@ Options:
 
           [default: 10]
 
+  -s, --silent-progress
+          Suppress progress bars and progress messages while processing repositories.
+
       --since <DATE>
           Include only commits after the specified date.
           Accepts any date format supported by Git.

@@ -52,6 +52,14 @@ pub struct Args {
     pub limit: Limit,
 
     #[arg(
+        short = 's',
+        long,
+        help = "Suppress progress output.",
+        long_help = "Suppress progress bars and progress messages while processing repositories."
+    )]
+    pub silent_progress: bool,
+
+    #[arg(
         long,
         value_name = "DATE",
         help = "Include only commits after the specified date.",

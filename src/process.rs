@@ -1,5 +1,5 @@
 use console::style;
-use indicatif::{HumanDuration, MultiProgress, ProgressBar, ProgressStyle};
+use indicatif::{HumanDuration, ProgressBar, ProgressStyle};
 use std::{
     collections::HashMap,
     path::Path,
@@ -25,7 +25,6 @@ pub fn process_repo(
         .to_owned();
 
     let started = Instant::now();
-    let m = MultiProgress::new();
 
     let mut result: HashMap<String, AuthorStats> = HashMap::new();
 
@@ -41,14 +40,21 @@ pub fn process_repo(
             .unwrap_or(0);
 
     /* Bar 1: repo-level progress (known total) */
-    let repo_pb = m.add(ProgressBar::new(total_steps));
-    repo_pb.enable_steady_tick(Duration::from_millis(200));
-    repo_pb.set_style(
-        ProgressStyle::with_template("{spinner:.white} {msg:.dim} [{elapsed_precise:.cyan} < {eta_precise:.dim}] ({pos:.green}/{len:.green})")
-            .unwrap()
-            .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]),
-    );
-    repo_pb.set_message(format!("Processing {}...", repo_name));
+    let repo_pb = if args.silent_progress {
+        ProgressBar::hidden()
+    } else {
+        let pb = ProgressBar::new(total_steps);
+        pb.enable_steady_tick(Duration::from_millis(200));
+        pb.set_style(
+            ProgressStyle::with_template(
+                    "{spinner:.white} {msg:.dim} [{elapsed_precise:.cyan} < {eta_precise:.dim}] ({pos:.green}/{len:.green})"
+                )
+                .unwrap()
+                .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]),
+        );
+        pb.set_message(format!("Processing {}...", repo_name));
+        pb
+    };
 
     let git_log_data = args
         .metrics
@@ -102,18 +108,19 @@ pub fn process_repo(
         }
     }
 
+    if !args.silent_progress {
+        repo_pb.println(
+            format!(
+                "{} {} {}",
+                style("Done").dim(),
+                style(&repo_name).bold().dim(),
+                style(format!("in {}", HumanDuration(started.elapsed()))).dim()
+            )
+            .to_owned(),
+        );
+    }
+
     repo_pb.finish_and_clear();
-    m.println(
-        format!(
-            "{} {} {}",
-            style("Done").dim(),
-            style(&repo_name).bold().dim(),
-            style(format!("in {}", HumanDuration(started.elapsed()))).dim()
-        )
-        .to_owned(),
-    )
-    .unwrap();
-    m.clear().unwrap();
 
     let sort_key: SortKey = args.sort.unwrap_or_else(|| SortKey::Commits);
     let mut rows: Vec<(String, AuthorStats)> = result.into_iter().collect();
