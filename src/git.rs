@@ -74,12 +74,13 @@ pub fn git_shortlog(
 ) -> Result<HashMap<String, usize>, GitError> {
     let mut cmd = Command::new("git");
 
-    cmd.arg("-C")
-        .arg(dir)
-        .args(["shortlog", "-s", "-e", "--no-merges"]);
+    cmd.arg("-C").arg(dir).args(["shortlog", "-s", "-e"]);
 
     push_opt_arg(&mut cmd, "--since", args.since.as_deref());
     push_opt_arg(&mut cmd, "--until", args.until.as_deref());
+
+    push_flag(&mut cmd, "--merges", args.merges);
+    push_flag(&mut cmd, "--no-merges", args.no_merges);
 
     cmd.arg(&args.branch);
 
@@ -129,13 +130,9 @@ pub fn git_log(
 ) -> Result<HashMap<String, AuthorHistoryStats>, GitError> {
     let mut cmd = Command::new("git");
 
-    cmd.arg("-C").arg(dir).args([
-        "log",
-        "--no-color",
-        "--format=aN:%aN aE:%aE",
-        "--no-merges",
-        "--numstat",
-    ]);
+    cmd.arg("-C")
+        .arg(dir)
+        .args(["log", "--no-color", "--format=aN:%aN aE:%aE", "--numstat"]);
 
     push_opt_arg(&mut cmd, "--since", args.since.as_deref());
     push_opt_arg(&mut cmd, "--until", args.until.as_deref());
@@ -143,6 +140,9 @@ pub fn git_log(
     push_flag(&mut cmd, "-w", args.ignore_whitespace);
     push_flag(&mut cmd, "-M", args.detect_moves);
     push_flag(&mut cmd, "-C", args.detect_copies);
+
+    push_flag(&mut cmd, "--merges", args.merges);
+    push_flag(&mut cmd, "--no-merges", args.no_merges);
 
     cmd.arg(&args.branch);
 

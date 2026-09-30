@@ -112,6 +112,12 @@ Options:
   -w, --ignore-whitespace
           Ignore whitespace-only changes when computing current metrics.
 
+      --merges
+          Include only merge commits (commits with two or more parents) for commits, files, and history metrics. Equivalent to Git's --min-parents=2.
+
+      --no-merges
+          Include only non-merge commits (commits with at most one parent) for commits, files, and history metrics. Equivalent to Git's --max-parents=1.
+
       --threads <THREADS>
           Number of parallel git operations. 0 = auto (min(CPU cores, 4)).
 
