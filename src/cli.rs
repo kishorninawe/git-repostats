@@ -1,7 +1,7 @@
 use clap::{Parser, ValueEnum};
 use std::{fmt, path::PathBuf};
 
-use crate::utils::{parse_limit, validate_git_dir};
+use crate::utils::{parse_limit, validate_git_dir, validate_ignore_revs_file};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about)]
@@ -120,6 +120,23 @@ pub struct Args {
         conflicts_with = "merges"
     )]
     pub no_merges: bool,
+
+    #[arg(
+        long,
+        value_name = "REV",
+        help = "Ignore the specified revision for current metrics.",
+        long_help = "Ignore the specified revision for current metrics.\nEquivalent to Git blame's --ignore-rev option."
+    )]
+    pub ignore_rev: Vec<String>,
+
+    #[arg(
+        long,
+        value_name = "FILE",
+        value_parser = validate_ignore_revs_file,
+        help = "Ignore revisions listed in a file for current metrics.",
+        long_help = "Ignore revisions listed in the specified file for current metrics.\nEquivalent to Git blame's --ignore-revs-file option."
+    )]
+    pub ignore_revs_file: Vec<PathBuf>,
 
     #[arg(
         long,

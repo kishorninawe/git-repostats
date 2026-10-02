@@ -282,6 +282,14 @@ fn git_blame_file(
     push_flag(&mut cmd, "-M", args.detect_moves);
     push_flag(&mut cmd, "-C", args.detect_copies);
 
+    for rev in &args.ignore_rev {
+        cmd.arg("--ignore-rev").arg(rev);
+    }
+
+    for rev_file in &args.ignore_revs_file {
+        cmd.arg("--ignore-revs-file").arg(rev_file);
+    }
+
     cmd.arg(&args.branch).arg(file);
 
     // Git executable couldn't be started.

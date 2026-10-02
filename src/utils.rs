@@ -1,6 +1,12 @@
 use console::style;
 use num_format::{Locale, ToFormattedString};
-use std::{collections::HashSet, io, path::PathBuf, process::Command};
+use std::{
+    collections::HashSet,
+    fs::File,
+    io,
+    path::{PathBuf, absolute},
+    process::Command,
+};
 
 use crate::{
     cli::{Args, Limit, Metrics, SortKey as Sort},
@@ -53,6 +59,20 @@ pub fn validate_git_dir(path: &str) -> Result<PathBuf, String> {
             e
         )
     })?;
+
+    Ok(path)
+}
+
+pub fn validate_ignore_revs_file(file: &str) -> Result<PathBuf, String> {
+    let path = PathBuf::from(file);
+
+    let path = absolute(&path).map_err(|e| format!("cannot resolve {}: {e}", path.display()))?;
+
+    if !path.is_file() {
+        return Err(format!("not a file: {}", path.display()));
+    }
+
+    File::open(&path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
 
     Ok(path)
 }
