@@ -1,0 +1,9 @@
+debug/
+target/
+**/*.rs.bk
+*.pdb
+.git/
+.github/
+.idea/
+.vscode/
+*.log

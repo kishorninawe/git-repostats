@@ -24,6 +24,34 @@ A fast CLI tool and library to analyze Git repositories and generate detailed co
 pip install git-repostats
 ```
 
+### Using Docker
+
+1. Build the Docker image
+
+Run this command from the directory containing the `Dockerfile`:
+
+```bash
+docker build -t git-repostats .
+```
+
+2. Run Git Repostats
+
+Mount your Git repository into the container:
+
+```bash
+docker run --rm -it -v "/path/to/your/repo:/repo" git-repostats
+```
+
+OR
+
+2. Run with CLI options
+
+```bash
+docker run --rm -it -v "/path/to/your/repo:/repo" git-repostats --metrics all
+```
+
+**Note:** Replace `/path/to/your/repo` with your repository's absolute path. `--rm` automatically removes the container after execution; the Docker image remains available for reuse.
+
 ## Usage
 
 ```bash
