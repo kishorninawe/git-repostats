@@ -24,4 +24,13 @@ pub enum AppError {
 
     #[error(transparent)]
     Io(#[from] std::io::Error),
+
+    #[error(transparent)]
+    Csv(#[from] csv::Error),
+
+    #[error("{0}")]
+    Format(String),
+
+    #[error("{0}")]
+    InvalidOutputExtension(String),
 }

@@ -4,12 +4,13 @@ use std::{
     collections::HashSet,
     fs::File,
     io,
-    path::{PathBuf, absolute},
+    path::{Path, PathBuf, absolute},
     process::Command,
 };
 
 use crate::{
-    cli::{Args, Limit, Metrics, SortKey as Sort},
+    cli::{Args, Limit, Metrics, OutputFormat, SortKey as Sort},
+    error::AppError,
     stats::AuthorStats,
 };
 
@@ -75,6 +76,28 @@ pub fn validate_ignore_revs_file(file: &str) -> Result<PathBuf, String> {
     File::open(&path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
 
     Ok(path)
+}
+
+pub fn validate_output_extension(path: &Path, format: OutputFormat) -> Result<(), AppError> {
+    let expected = format.extension();
+
+    let actual = path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .ok_or_else(|| {
+            AppError::InvalidOutputExtension(format!(
+                "output filename must have a .{expected} extension"
+            ))
+        })?;
+
+    if !actual.eq_ignore_ascii_case(expected) {
+        return Err(AppError::InvalidOutputExtension(format!(
+            "format {} requires a .{expected} extension, got .{actual}",
+            format
+        )));
+    }
+
+    Ok(())
 }
 
 pub fn parse_metrics(metrics: &[Metrics]) -> Vec<Metrics> {
@@ -212,4 +235,17 @@ pub fn fmt_number<T: ToFormattedString>(n: &Option<T>) -> String {
         Some(v) => v.to_formatted_string(&Locale::en),
         None => "".to_owned(),
     }
+}
+
+pub fn output_path_for_repo(path: &Path, repo_name: &str) -> PathBuf {
+    let parent = path.parent().unwrap_or(Path::new(""));
+    let stem = path.file_stem().unwrap_or_default().to_string_lossy();
+    let extension = path.extension().map(|ext| ext.to_string_lossy());
+
+    let filename = match extension {
+        Some(ext) => format!("{stem}-{repo_name}.{ext}"),
+        None => format!("{stem}-{repo_name}"),
+    };
+
+    parent.join(filename)
 }
