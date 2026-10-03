@@ -327,3 +327,253 @@ fn git_blame_file(
 
     Ok(result)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    #[test]
+    fn test_shortlog_regex_matching() {
+        let sample = "    42  John Doe  <john@example.com>";
+        let caps = SHORTLOG_RE
+            .captures(sample)
+            .expect("Should match shortlog line");
+        assert_eq!(&caps["commit"], "42");
+        assert_eq!(caps["name"].trim(), "John Doe");
+        assert_eq!(&caps["email"], "john@example.com");
+
+        let tab_sample = "\t5\tJane Smith\t<jane@test.org>";
+        let caps_tab = SHORTLOG_RE
+            .captures(tab_sample)
+            .expect("Should match tabbed shortlog line");
+        assert_eq!(&caps_tab["commit"], "5");
+        assert_eq!(caps_tab["name"].trim(), "Jane Smith");
+        assert_eq!(&caps_tab["email"], "jane@test.org");
+
+        assert!(SHORTLOG_RE.captures("invalid line without email").is_none());
+        assert!(SHORTLOG_RE.captures("").is_none());
+    }
+
+    #[test]
+    fn test_log_regex_matching() {
+        let header = "aN:Alice Wonder aE:alice@wonderland.com";
+        let caps = LOG_RE.captures(header).expect("Should match log header");
+        assert_eq!(&caps["name"], "Alice Wonder");
+        assert_eq!(&caps["email"], "alice@wonderland.com");
+
+        let empty_email = "aN:Bob aE:";
+        let caps_empty = LOG_RE
+            .captures(empty_email)
+            .expect("Should match log header with empty email");
+        assert_eq!(&caps_empty["name"], "Bob");
+        assert_eq!(&caps_empty["email"], "");
+
+        assert!(LOG_RE.captures("12\t4\tsrc/git.rs").is_none());
+        assert!(LOG_RE.captures("commit abcdef1234567890").is_none());
+    }
+
+    #[test]
+    fn test_blame_regex_matching() {
+        let porcelain = "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678 10 20 15\nauthor Carol King\nauthor-mail <carol@music.com>";
+        let caps = BLAME_RE
+            .captures(porcelain)
+            .expect("Should match blame porcelain header");
+        assert_eq!(&caps["num_lines"], "15");
+        assert_eq!(&caps["name"], "Carol King");
+        assert_eq!(&caps["email"], "carol@music.com");
+
+        let invalid = "invalid blame content";
+        assert!(BLAME_RE.captures(invalid).is_none());
+    }
+
+    #[test]
+    fn test_git_list_files_success() {
+        let args = Args::try_parse_from(["git-repostats"]).expect("Failed to parse default args");
+        let res = git_list_files(Path::new("."), &args);
+        assert!(res.is_ok());
+
+        let files = res.unwrap();
+        assert!(!files.is_empty());
+        assert!(files.contains("Cargo.toml"));
+        assert!(files.contains("src/git.rs"));
+    }
+
+    #[test]
+    fn test_git_list_files_invalid_branch() {
+        let args =
+            Args::try_parse_from(["git-repostats", "--branch", "non_existent_branch_xyz123"])
+                .expect("Failed to parse args");
+        let res = git_list_files(Path::new("."), &args);
+        assert!(matches!(res, Err(GitError::CommandFailed { .. })));
+    }
+
+    #[test]
+    fn test_git_shortlog_success() {
+        let args = Args::try_parse_from(["git-repostats"]).expect("Failed to parse default args");
+        let pb = ProgressBar::hidden();
+        let res = git_shortlog(Path::new("."), &args, &pb);
+        assert!(res.is_ok());
+
+        let stats = res.unwrap();
+        assert!(!stats.is_empty());
+        let total_commits: usize = stats.values().sum();
+        assert!(total_commits > 0);
+    }
+
+    #[test]
+    fn test_git_shortlog_show_author_modes() {
+        let pb = ProgressBar::hidden();
+        let modes = [
+            ("name", ShowAuthor::Name),
+            ("email", ShowAuthor::Email),
+            ("both", ShowAuthor::Both),
+        ];
+
+        for (val, mode) in modes {
+            let args = Args::try_parse_from(["git-repostats", "--show", val])
+                .unwrap_or_else(|_| panic!("Failed to parse --show {val}"));
+            let res = git_shortlog(Path::new("."), &args, &pb);
+            assert!(res.is_ok());
+
+            let stats = res.unwrap();
+            assert!(!stats.is_empty());
+            for author in stats.keys() {
+                match mode {
+                    ShowAuthor::Name | ShowAuthor::Email => {
+                        assert!(!author.contains('<') && !author.contains('>'));
+                    }
+                    ShowAuthor::Both => {
+                        assert!(author.contains('<') && author.contains('>'));
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_git_shortlog_invalid_branch() {
+        let args =
+            Args::try_parse_from(["git-repostats", "--branch", "non_existent_branch_xyz123"])
+                .expect("Failed to parse args");
+        let pb = ProgressBar::hidden();
+        let res = git_shortlog(Path::new("."), &args, &pb);
+        assert!(matches!(res, Err(GitError::CommandFailed { .. })));
+    }
+
+    #[test]
+    fn test_git_log_success() {
+        let args = Args::try_parse_from(["git-repostats"]).expect("Failed to parse default args");
+        let mut allowed_files = HashSet::new();
+        allowed_files.insert("Cargo.toml".to_string());
+        let pb = ProgressBar::hidden();
+
+        let res = git_log(Path::new("."), &args, &allowed_files, &pb);
+        assert!(res.is_ok());
+
+        let history = res.unwrap();
+        assert!(!history.is_empty());
+
+        for stats in history.values() {
+            assert_eq!(stats.churn, stats.ins + stats.del);
+            assert_eq!(stats.net, stats.ins as isize - stats.del as isize);
+        }
+    }
+
+    #[test]
+    fn test_git_log_empty_allowed_files() {
+        let args = Args::try_parse_from(["git-repostats"]).expect("Failed to parse default args");
+        let allowed_files = HashSet::new();
+        let pb = ProgressBar::hidden();
+
+        let res = git_log(Path::new("."), &args, &allowed_files, &pb);
+        assert!(res.is_ok());
+
+        let history = res.unwrap();
+        for stats in history.values() {
+            assert!(stats.files.is_empty());
+            assert_eq!(stats.ins, 0);
+            assert_eq!(stats.del, 0);
+            assert_eq!(stats.churn, 0);
+            assert_eq!(stats.net, 0);
+        }
+    }
+
+    #[test]
+    fn test_git_log_invalid_branch() {
+        let args =
+            Args::try_parse_from(["git-repostats", "--branch", "non_existent_branch_xyz123"])
+                .expect("Failed to parse args");
+        let allowed = HashSet::new();
+        let pb = ProgressBar::hidden();
+        let res = git_log(Path::new("."), &args, &allowed, &pb);
+        assert!(matches!(res, Err(GitError::CommandFailed { .. })));
+    }
+
+    #[test]
+    fn test_git_blame_file_success() {
+        let args = Args::try_parse_from(["git-repostats"]).expect("Failed to parse default args");
+        let res = git_blame_file(Path::new("."), &args, "Cargo.toml");
+        assert!(res.is_ok());
+
+        let stats = res.unwrap();
+        assert!(!stats.is_empty());
+        let total_lines: usize = stats.values().map(|s| s.surviving).sum();
+        assert!(total_lines > 0);
+    }
+
+    #[test]
+    fn test_git_blame_file_nonexistent() {
+        let args = Args::try_parse_from(["git-repostats"]).expect("Failed to parse default args");
+        let res = git_blame_file(Path::new("."), &args, "non_existent_file_xyz123.txt");
+        assert!(matches!(res, Err(GitError::CommandFailed { .. })));
+    }
+
+    #[test]
+    fn test_git_blame_success() {
+        let args = Args::try_parse_from(["git-repostats"]).expect("Failed to parse default args");
+        let mut files = HashSet::new();
+        files.insert("Cargo.toml".to_string());
+        let pb = ProgressBar::hidden();
+
+        let res = git_blame(Path::new("."), &args, &files, &pb);
+        assert!(res.is_ok());
+
+        let stats = res.unwrap();
+        assert!(!stats.is_empty());
+        let total_lines: usize = stats.values().map(|s| s.surviving).sum();
+        assert!(total_lines > 0);
+    }
+
+    #[test]
+    fn test_git_blame_empty_files() {
+        let args = Args::try_parse_from(["git-repostats"]).expect("Failed to parse default args");
+        let files = HashSet::new();
+        let pb = ProgressBar::hidden();
+
+        let res = git_blame(Path::new("."), &args, &files, &pb);
+        assert!(res.is_ok());
+
+        let stats = res.unwrap();
+        assert!(stats.is_empty());
+    }
+
+    #[test]
+    fn test_git_error_display() {
+        let cmd_err = GitError::CommandFailed {
+            command: "git grep".to_string(),
+            status: 128,
+            stderr: "fatal: not a git repo".to_string(),
+        };
+        assert_eq!(
+            format!("{cmd_err}"),
+            "`git grep` failed with exit code 128: fatal: not a git repo"
+        );
+
+        let io_err = GitError::Io {
+            command: "git log".to_string(),
+            source: std::io::Error::new(std::io::ErrorKind::NotFound, "binary not found"),
+        };
+        assert!(format!("{io_err}").contains("failed to execute `git log`"));
+    }
+}

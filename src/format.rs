@@ -488,3 +488,348 @@ fn display_net(v: &Option<isize>) -> String {
         Some(n) => n.to_string(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    fn sample_stats() -> Vec<(String, AuthorStats)> {
+        vec![
+            (
+                "Alice <alice@test.com>".to_string(),
+                AuthorStats {
+                    commits: Some(10),
+                    files: Some(5),
+                    surviving: Some(100),
+                    ins: Some(150),
+                    del: Some(30),
+                    net: Some(120),
+                    churn: Some(180),
+                },
+            ),
+            (
+                "Bob <bob@test.com>".to_string(),
+                AuthorStats {
+                    commits: Some(5),
+                    files: Some(2),
+                    surviving: Some(50),
+                    ins: Some(60),
+                    del: Some(10),
+                    net: Some(50),
+                    churn: Some(70),
+                },
+            ),
+            (
+                "Carol <carol@test.com>".to_string(),
+                AuthorStats {
+                    commits: Some(2),
+                    files: Some(1),
+                    surviving: Some(20),
+                    ins: Some(30),
+                    del: Some(5),
+                    net: Some(25),
+                    churn: Some(35),
+                },
+            ),
+        ]
+    }
+
+    #[test]
+    fn test_display_helpers() {
+        // display_ins
+        assert_eq!(display_ins(&None), "");
+        assert_eq!(display_ins(&Some(0)), "0");
+        assert_eq!(display_ins(&Some(100)), "+100");
+        assert_eq!(display_ins(&Some(1234567)), "+1,234,567");
+
+        // display_del
+        assert_eq!(display_del(&None), "");
+        assert_eq!(display_del(&Some(0)), "0");
+        assert_eq!(display_del(&Some(50)), "-50");
+        assert_eq!(display_del(&Some(987654)), "-987,654");
+
+        // display_net
+        assert_eq!(display_net(&None), "");
+        assert_eq!(display_net(&Some(0)), "0");
+        assert_eq!(display_net(&Some(250)), "+250");
+        assert_eq!(display_net(&Some(1000000)), "+1,000,000");
+        assert_eq!(display_net(&Some(-42)), "-42");
+    }
+
+    #[test]
+    fn test_split_rows_by_limit() {
+        let rows = sample_stats();
+
+        // Limit::All
+        let args_all = Args::try_parse_from(["git-repostats", "--limit", "all"])
+            .expect("Failed to parse args");
+        let (visible, remaining) = split_rows_by_limit(&args_all, &rows);
+        assert_eq!(visible.len(), 3);
+        assert!(remaining.is_empty());
+
+        // Limit::Count(2)
+        let args_count =
+            Args::try_parse_from(["git-repostats", "-l", "2"]).expect("Failed to parse args");
+        let (visible, remaining) = split_rows_by_limit(&args_count, &rows);
+        assert_eq!(visible.len(), 2);
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].0, "Carol <carol@test.com>");
+
+        // Limit larger than row count
+        let args_large =
+            Args::try_parse_from(["git-repostats", "-l", "10"]).expect("Failed to parse args");
+        let (visible, remaining) = split_rows_by_limit(&args_large, &rows);
+        assert_eq!(visible.len(), 3);
+        assert!(remaining.is_empty());
+
+        // Empty rows
+        let empty_rows: Vec<(String, AuthorStats)> = vec![];
+        let (visible, remaining) = split_rows_by_limit(&args_count, &empty_rows);
+        assert!(visible.is_empty());
+        assert!(remaining.is_empty());
+    }
+
+    #[test]
+    fn test_aggregate_stats_success() {
+        let rows = sample_stats();
+        let aggregated = aggregate_stats(&rows).expect("Failed to aggregate stats");
+
+        assert_eq!(aggregated.commits, Some(17));
+        assert_eq!(aggregated.files, Some(8));
+        assert_eq!(aggregated.surviving, Some(170));
+        assert_eq!(aggregated.ins, Some(240));
+        assert_eq!(aggregated.del, Some(45));
+        assert_eq!(aggregated.net, Some(195));
+        assert_eq!(aggregated.churn, Some(285));
+    }
+
+    #[test]
+    fn test_aggregate_stats_empty() {
+        let empty_rows: Vec<(String, AuthorStats)> = vec![];
+        let err = aggregate_stats(&empty_rows);
+        assert!(matches!(err, Err(AppError::Format(_))));
+    }
+
+    #[test]
+    fn test_format_table_single_author() {
+        let rows = vec![(
+            "Alice".to_string(),
+            AuthorStats {
+                commits: Some(10),
+                files: Some(5),
+                surviving: Some(100),
+                ins: Some(150),
+                del: Some(30),
+                net: Some(120),
+                churn: Some(180),
+            },
+        )];
+
+        let args = Args::try_parse_from(["git-repostats"]).expect("Failed to parse args");
+        let (visible, remaining) = split_rows_by_limit(&args, &rows);
+        let table = format_table(&args, "my-repo", &rows, visible, remaining)
+            .expect("Failed to format table");
+
+        assert!(table.contains("Repository: my-repo"));
+        assert!(table.contains("Alice"));
+        assert!(!table.contains("TOTAL"));
+        assert!(!table.contains("OTHER"));
+    }
+
+    #[test]
+    fn test_format_table_multiple_with_limit() {
+        let rows = sample_stats();
+        let args =
+            Args::try_parse_from(["git-repostats", "-l", "2"]).expect("Failed to parse args");
+        let (visible, remaining) = split_rows_by_limit(&args, &rows);
+        let table = format_table(&args, "my-repo", &rows, visible, remaining)
+            .expect("Failed to format table");
+
+        assert!(table.contains("Repository: my-repo"));
+        assert!(table.contains("Alice"));
+        assert!(table.contains("Bob"));
+        assert!(table.contains("OTHER (1 author)"));
+        assert!(table.contains("TOTAL (3 authors)"));
+    }
+
+    #[test]
+    fn test_format_table_empty() {
+        let rows: Vec<(String, AuthorStats)> = vec![];
+        let args = Args::try_parse_from(["git-repostats"]).expect("Failed to parse args");
+        let (visible, remaining) = split_rows_by_limit(&args, &rows);
+        let output = format_table(&args, "my-repo", &rows, visible, remaining)
+            .expect("Failed to format table");
+
+        assert_eq!(output, "No data to display for repository: my-repo");
+    }
+
+    #[test]
+    fn test_format_table_sort_indicators() {
+        let rows = sample_stats();
+
+        // Descending arrow (default reverse=false)
+        let args_desc = Args::try_parse_from(["git-repostats", "--sort", "commits"])
+            .expect("Failed to parse args");
+        let (visible, remaining) = split_rows_by_limit(&args_desc, &rows);
+        let table_desc = format_table(&args_desc, "repo", &rows, visible, remaining).unwrap();
+        assert!(table_desc.contains("Commits ↓"));
+
+        // Ascending arrow (reverse=true)
+        let args_asc = Args::try_parse_from(["git-repostats", "--sort", "commits", "--reverse"])
+            .expect("Failed to parse args");
+        let (visible, remaining) = split_rows_by_limit(&args_asc, &rows);
+        let table_asc = format_table(&args_asc, "repo", &rows, visible, remaining).unwrap();
+        assert!(table_asc.contains("Commits ↑"));
+    }
+
+    #[test]
+    fn test_format_csv_valid() {
+        let rows = sample_stats();
+        let args = Args::try_parse_from([
+            "git-repostats",
+            "--format",
+            "csv",
+            "--metrics",
+            "commits",
+            "files",
+            "current",
+            "history",
+            "all",
+            "-l",
+            "2",
+        ])
+        .expect("Failed to parse args");
+
+        let (visible, remaining) = split_rows_by_limit(&args, &rows);
+        let csv_output =
+            format_csv(&args, "csv-repo", &rows, visible, remaining).expect("Failed to format csv");
+
+        assert!(csv_output.contains("# Repository: csv-repo"));
+        assert!(csv_output.contains("# Authors: 2 of 3 shown"));
+        assert!(csv_output.contains("# Limit: 2"));
+        assert!(csv_output.contains("# Truncated: true"));
+        assert!(
+            csv_output.contains("Author,Commits,Files,Surviving,Insertions,Deletions,Net,Churn")
+        );
+        assert!(csv_output.contains("Alice <alice@test.com>,10,5,100,150,30,120,180"));
+        assert!(csv_output.contains("Bob <bob@test.com>,5,2,50,60,10,50,70"));
+    }
+
+    #[test]
+    fn test_format_json_valid() {
+        let rows = sample_stats();
+        let args = Args::try_parse_from([
+            "git-repostats",
+            "--format",
+            "json",
+            "--metrics",
+            "commits",
+            "files",
+            "current",
+            "history",
+            "all",
+            "-l",
+            "2",
+        ])
+        .expect("Failed to parse args");
+
+        let (visible, remaining) = split_rows_by_limit(&args, &rows);
+        let json_str = format_json(&args, "json-repo", &rows, visible, remaining)
+            .expect("Failed to format json");
+
+        let v: Value = serde_json::from_str(&json_str).expect("Failed to deserialize json");
+        assert_eq!(v["metadata"]["repository"], "json-repo");
+        assert_eq!(v["metadata"]["total_authors"], 3);
+        assert_eq!(v["metadata"]["returned_authors"], 2);
+        assert_eq!(v["metadata"]["limit"], 2);
+        assert_eq!(v["metadata"]["truncated"], true);
+
+        let authors = v["authors"].as_array().expect("authors should be array");
+        assert_eq!(authors.len(), 2);
+        assert_eq!(authors[0]["Author"], "Alice <alice@test.com>");
+        assert_eq!(authors[0]["Commits"], 10);
+        assert_eq!(authors[0]["Files"], 5);
+        assert_eq!(authors[0]["Surviving"], 100);
+        assert_eq!(authors[0]["Insertions"], 150);
+        assert_eq!(authors[0]["Deletions"], 30);
+        assert_eq!(authors[0]["Net"], 120);
+        assert_eq!(authors[0]["Churn"], 180);
+        assert_eq!(authors[1]["Author"], "Bob <bob@test.com>");
+        assert_eq!(authors[1]["Commits"], 5);
+        assert_eq!(authors[1]["Files"], 2);
+        assert_eq!(authors[1]["Surviving"], 50);
+        assert_eq!(authors[1]["Insertions"], 60);
+        assert_eq!(authors[1]["Deletions"], 10);
+        assert_eq!(authors[1]["Net"], 50);
+        assert_eq!(authors[1]["Churn"], 70);
+    }
+
+    #[test]
+    fn test_format_yaml_valid() {
+        let rows = sample_stats();
+        let args = Args::try_parse_from(["git-repostats", "--format", "yaml", "-l", "2"])
+            .expect("Failed to parse args");
+
+        let (visible, remaining) = split_rows_by_limit(&args, &rows);
+        let yaml_str = format_yaml(&args, "yaml-repo", &rows, visible, remaining)
+            .expect("Failed to format yaml");
+
+        assert!(yaml_str.contains("repository: yaml-repo"));
+        assert!(yaml_str.contains("total_authors: 3"));
+        assert!(yaml_str.contains("returned_authors: 2"));
+        assert!(yaml_str.contains("Alice <alice@test.com>"));
+    }
+
+    #[test]
+    fn test_format_markdown_valid() {
+        let rows = sample_stats();
+        let args = Args::try_parse_from(["git-repostats", "--format", "markdown", "-l", "2"])
+            .expect("Failed to parse args");
+
+        let (visible, remaining) = split_rows_by_limit(&args, &rows);
+        let md = format_markdown(&args, "md-repo", &rows, visible, remaining)
+            .expect("Failed to format markdown");
+
+        assert!(md.contains("# Repository: md-repo"));
+        assert!(md.contains("| Author"));
+        assert!(md.contains("Alice <alice@test.com>"));
+        assert!(md.contains("Bob <bob@test.com>"));
+        assert!(md.contains("**OTHER (1 author)**"));
+        assert!(md.contains("**TOTAL (3 authors)**"));
+    }
+
+    #[test]
+    fn test_format_markdown_empty() {
+        let rows: Vec<(String, AuthorStats)> = vec![];
+        let args = Args::try_parse_from(["git-repostats", "--format", "markdown"])
+            .expect("Failed to parse args");
+
+        let (visible, remaining) = split_rows_by_limit(&args, &rows);
+        let output = format_markdown(&args, "md-repo", &rows, visible, remaining)
+            .expect("Failed to format markdown");
+
+        assert_eq!(output, "No data to display for repository: md-repo");
+    }
+
+    #[test]
+    fn test_format_repo_dispatch() {
+        let rows = sample_stats();
+        let formats = [
+            ("table", OutputFormat::Table),
+            ("json", OutputFormat::Json),
+            ("csv", OutputFormat::Csv),
+            ("yaml", OutputFormat::Yaml),
+            ("markdown", OutputFormat::Markdown),
+        ];
+
+        for (fmt_str, _) in formats {
+            let args = Args::try_parse_from(["git-repostats", "--format", fmt_str])
+                .unwrap_or_else(|_| panic!("Failed to parse format {fmt_str}"));
+            let res = format_repo(&args, "test-repo", rows.clone());
+            assert!(res.is_ok(), "format_repo failed for {fmt_str}");
+            let text = res.unwrap();
+            assert!(!text.is_empty());
+        }
+    }
+}
