@@ -1,4 +1,5 @@
 use clap::{Parser, ValueEnum};
+use serde::Serialize;
 use std::{fmt, path::PathBuf};
 
 use crate::utils::{parse_limit, validate_git_dir, validate_ignore_revs_file};
@@ -25,7 +26,7 @@ pub struct Args {
         long,
         value_enum,
         num_args = 1..,
-        default_values_t =vec![ Metrics::Commits],
+        default_values_t =vec![Metrics::Commits],
         help = "Select which metrics to compute."
     )]
     pub metrics: Vec<Metrics>,
@@ -58,6 +59,23 @@ pub struct Args {
         long_help = "Suppress progress bars and progress messages while processing repositories."
     )]
     pub silent_progress: bool,
+
+    #[arg(
+    long,
+    value_enum,
+    default_value_t = OutputFormat::Table,
+    help = "Set the output format (table, json, csv, yaml, markdown).",
+    long_help = "Set the output format for repository statistics.\nSupported formats: table, json, csv, yaml and markdown.\nDefaults to table."
+)]
+    pub format: OutputFormat,
+
+    #[arg(
+        long,
+        value_name = "FILE",
+        help = "Write output to a file instead of stdout.",
+        long_help = "Write repository statistics to the specified file instead of stdout.\nThe output format is determined by --format.\nIf the file already exists, it will be overwritten."
+    )]
+    pub output: Option<PathBuf>,
 
     #[arg(
         long,
@@ -200,13 +218,31 @@ pub enum ShowAuthor {
     Both,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub enum Limit {
     /// No limit; show all authors.
     All,
 
     /// Limit to a specific number of authors.
     Count(usize),
+}
+
+#[derive(Copy, Clone, Debug, ValueEnum)]
+pub enum OutputFormat {
+    /// Output results as formatted table.
+    Table,
+
+    /// Output results as JSON.
+    Json,
+
+    /// Output results as CSV.
+    Csv,
+
+    /// Output results as YAML.
+    Yaml,
+
+    /// Output results as Markdown.
+    Markdown,
 }
 
 impl fmt::Display for SortKey {
@@ -217,5 +253,40 @@ impl fmt::Display for SortKey {
         let rest = &s[1..].to_lowercase();
 
         write!(f, "{first}{rest}")
+    }
+}
+
+impl fmt::Display for Limit {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::All => write!(f, "All"),
+            Self::Count(n) => write!(f, "{n}"),
+        }
+    }
+}
+
+impl fmt::Display for OutputFormat {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let name = match self {
+            Self::Table => "Table",
+            Self::Json => "JSON",
+            Self::Csv => "CSV",
+            Self::Yaml => "YAML",
+            Self::Markdown => "Markdown",
+        };
+
+        write!(f, "{name}")
+    }
+}
+
+impl OutputFormat {
+    pub fn extension(&self) -> &'static str {
+        match self {
+            Self::Table => "txt",
+            Self::Json => "json",
+            Self::Csv => "csv",
+            Self::Yaml => "yaml",
+            Self::Markdown => "md",
+        }
     }
 }

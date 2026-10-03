@@ -115,6 +115,25 @@ Options:
   -s, --silent-progress
           Suppress progress bars and progress messages while processing repositories.
 
+      --format <FORMAT>
+          Set the output format for repository statistics.
+          Supported formats: table, json, csv, yaml and markdown.
+          Defaults to table.
+
+          Possible values:
+          - table:    Output results as formatted table
+          - json:     Output results as JSON
+          - csv:      Output results as CSV
+          - yaml:     Output results as YAML
+          - markdown: Output results as Markdown
+
+          [default: table]
+
+      --output <FILE>
+          Write repository statistics to the specified file instead of stdout.
+          The output format is determined by --format.
+          If the file already exists, it will be overwritten.
+
       --since <DATE>
           Include only commits after the specified date.
           Accepts any date format supported by Git.

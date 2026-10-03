@@ -4,7 +4,7 @@ use git_repostats::{
     cli::Args,
     error::AppError,
     run,
-    utils::{get_sort_key, parse_metrics},
+    utils::{get_sort_key, parse_metrics, validate_output_extension},
 };
 
 fn main() {
@@ -15,6 +15,10 @@ fn main() {
 
 fn try_main() -> Result<(), AppError> {
     let mut args = Args::parse();
+
+    if let Some(path) = &args.output {
+        validate_output_extension(path, args.format)?;
+    }
 
     args.metrics = parse_metrics(&args.metrics);
     args.sort = Some(get_sort_key(&args));
