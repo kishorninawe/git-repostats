@@ -52,3 +52,53 @@ pub fn run(args: Args) -> Result<(), AppError> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    #[test]
+    fn test_run_stdout() {
+        let args = Args::try_parse_from(["git-repostats", "-s"]).expect("Failed to parse args");
+        let res = run(args);
+        assert!(res.is_ok());
+    }
+
+    #[test]
+    fn test_run_file_output_json() {
+        let temp_output = std::env::temp_dir().join("test_repostats_output.json");
+        let args = Args::try_parse_from([
+            "git-repostats",
+            "-s",
+            "--format",
+            "json",
+            "--output",
+            temp_output.to_str().unwrap(),
+        ])
+        .expect("Failed to parse args");
+
+        let res = run(args);
+        assert!(res.is_ok());
+
+        assert!(temp_output.exists());
+        let content = fs::read_to_string(&temp_output).expect("Failed to read output file");
+        assert!(content.contains("git-repostats"));
+
+        let _ = fs::remove_file(temp_output);
+    }
+
+    #[test]
+    fn test_run_invalid_branch() {
+        let args = Args::try_parse_from([
+            "git-repostats",
+            "-s",
+            "--branch",
+            "non_existent_branch_xyz123",
+        ])
+        .expect("Failed to parse args");
+
+        let res = run(args);
+        assert!(res.is_err());
+    }
+}

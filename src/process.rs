@@ -139,3 +139,134 @@ pub fn process_repo(
 
     Ok((repo_name, rows))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    #[test]
+    fn test_process_repo_default() {
+        let args = Args::try_parse_from(["git-repostats", "-s"]).expect("Failed to parse args");
+        let (repo_name, rows) =
+            process_repo(&args.gitdir[0], &args).expect("Failed to process repo");
+
+        assert_eq!(repo_name, "git-repostats");
+        assert!(!rows.is_empty());
+
+        for (author, stats) in &rows {
+            assert!(!author.is_empty());
+            assert!(stats.commits.is_some());
+            assert!(stats.commits.unwrap() > 0);
+        }
+
+        // Verify descending order
+        for window in rows.windows(2) {
+            let a_commits = window[0].1.commits.unwrap_or(0);
+            let b_commits = window[1].1.commits.unwrap_or(0);
+            assert!(a_commits >= b_commits);
+        }
+    }
+
+    #[test]
+    fn test_process_repo_with_all_metrics() {
+        let args = Args::try_parse_from([
+            "git-repostats",
+            "-s",
+            "--metrics",
+            "commits",
+            "files",
+            "history",
+            "current",
+            "all",
+        ])
+        .expect("Failed to parse args");
+
+        let (repo_name, rows) =
+            process_repo(&args.gitdir[0], &args).expect("Failed to process repo");
+
+        assert_eq!(repo_name, "git-repostats");
+        assert!(!rows.is_empty());
+
+        for (_, stats) in &rows {
+            assert!(stats.commits.is_some());
+            assert!(stats.files.is_some());
+            assert!(stats.surviving.is_some());
+            assert!(stats.ins.is_some());
+            assert!(stats.del.is_some());
+            assert!(stats.net.is_some());
+            assert!(stats.churn.is_some());
+
+            let ins = stats.ins.unwrap();
+            let del = stats.del.unwrap();
+            let churn = stats.churn.unwrap();
+            let net = stats.net.unwrap();
+
+            assert_eq!(churn, ins + del);
+            assert_eq!(net, ins as isize - del as isize);
+        }
+    }
+
+    #[test]
+    fn test_process_repo_reverse_sort() {
+        let args = Args::try_parse_from(["git-repostats", "-s", "--reverse"])
+            .expect("Failed to parse args");
+        let (_, rows) = process_repo(&args.gitdir[0], &args).expect("Failed to process repo");
+
+        assert!(!rows.is_empty());
+
+        // Verify ascending order
+        for window in rows.windows(2) {
+            let a_commits = window[0].1.commits.unwrap_or(0);
+            let b_commits = window[1].1.commits.unwrap_or(0);
+            assert!(a_commits <= b_commits);
+        }
+    }
+
+    #[test]
+    fn test_process_repo_sort_by_surviving() {
+        let args = Args::try_parse_from([
+            "git-repostats",
+            "-s",
+            "--metrics",
+            "current",
+            "--sort",
+            "surviving",
+        ])
+        .expect("Failed to parse args");
+
+        let (_, rows) = process_repo(&args.gitdir[0], &args).expect("Failed to process repo");
+        assert!(!rows.is_empty());
+
+        for window in rows.windows(2) {
+            let a_surviving = window[0].1.surviving.unwrap_or(0);
+            let b_surviving = window[1].1.surviving.unwrap_or(0);
+            assert!(a_surviving >= b_surviving);
+        }
+    }
+
+    #[test]
+    fn test_process_repo_non_silent_progress() {
+        let args = Args::try_parse_from(["git-repostats"]).expect("Failed to parse args");
+        assert!(!args.silent_progress);
+
+        let (repo_name, rows) =
+            process_repo(&args.gitdir[0], &args).expect("Failed to process repo");
+        assert_eq!(repo_name, "git-repostats");
+        assert!(!rows.is_empty());
+    }
+
+    #[test]
+    fn test_process_repo_invalid_branch() {
+        let args = Args::try_parse_from([
+            "git-repostats",
+            "-s",
+            "--branch",
+            "non_existent_branch_xyz123",
+        ])
+        .expect("Failed to parse args");
+
+        let res = process_repo(&args.gitdir[0], &args);
+        assert!(res.is_err());
+    }
+}

@@ -164,7 +164,7 @@ pub struct Args {
     pub threads: u32,
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, ValueEnum, Hash, Eq)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum, Hash)]
 pub enum Metrics {
     /// Commit count per author.
     Commits,
@@ -182,7 +182,7 @@ pub enum Metrics {
     All,
 }
 
-#[derive(Copy, Clone, Debug, ValueEnum)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
 pub enum SortKey {
     /// Number of commits authored by the user.
     Commits,
@@ -206,7 +206,7 @@ pub enum SortKey {
     Surviving,
 }
 
-#[derive(Copy, Clone, Debug, ValueEnum)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
 pub enum ShowAuthor {
     /// Author name only.
     Name,
@@ -218,7 +218,7 @@ pub enum ShowAuthor {
     Both,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize)]
 pub enum Limit {
     /// No limit; show all authors.
     All,
@@ -227,7 +227,7 @@ pub enum Limit {
     Count(usize),
 }
 
-#[derive(Copy, Clone, Debug, ValueEnum)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
 pub enum OutputFormat {
     /// Output results as formatted table.
     Table,
@@ -288,5 +288,308 @@ impl OutputFormat {
             Self::Yaml => "yaml",
             Self::Markdown => "md",
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    #[test]
+    fn test_clap_command_validity() {
+        // Verifies clap configuration has no internal conflicts or misconfigurations.
+        Args::command().debug_assert();
+    }
+
+    #[test]
+    fn test_default_args() {
+        let args = Args::try_parse_from(["git-repostats"]).expect("Failed to parse default args");
+
+        assert_eq!(args.branch, "HEAD");
+        assert_eq!(args.metrics, vec![Metrics::Commits]);
+        assert_eq!(args.sort, None);
+        assert!(!args.reverse);
+        assert_eq!(args.limit, Limit::Count(10));
+        assert!(!args.silent_progress);
+        assert_eq!(args.format, OutputFormat::Table);
+        assert_eq!(args.output, None);
+        assert_eq!(args.since, None);
+        assert_eq!(args.until, None);
+        assert_eq!(args.show, ShowAuthor::Both);
+        assert!(!args.detect_moves);
+        assert!(!args.detect_copies);
+        assert!(!args.ignore_whitespace);
+        assert!(!args.merges);
+        assert!(!args.no_merges);
+        assert_eq!(args.threads, 0);
+        assert!(args.ignore_rev.is_empty());
+        assert!(args.ignore_revs_file.is_empty());
+        assert!(!args.gitdir.is_empty());
+    }
+
+    #[test]
+    fn test_gitdir_arg() {
+        let args = Args::try_parse_from(["git-repostats", "."]).expect("Failed to parse gitdir");
+        assert_eq!(args.gitdir.len(), 1);
+
+        let err = Args::try_parse_from(["git-repostats", "this_path_should_not_exist"]);
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn test_branch_arg() {
+        let args = Args::try_parse_from(["git-repostats", "--branch", "feature-branch"])
+            .expect("Failed to parse branch");
+        assert_eq!(args.branch, "feature-branch");
+    }
+
+    #[test]
+    fn test_metrics_arg() {
+        let args = Args::try_parse_from([
+            "git-repostats",
+            "--metrics",
+            "commits",
+            "files",
+            "history",
+            "current",
+            "all",
+        ])
+        .expect("Failed to parse metrics");
+
+        assert_eq!(
+            args.metrics,
+            vec![
+                Metrics::Commits,
+                Metrics::Files,
+                Metrics::History,
+                Metrics::Current,
+                Metrics::All
+            ]
+        );
+
+        let err = Args::try_parse_from(["git-repostats", "--metrics", "invalid_metric"]);
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn test_sort_arg() {
+        let sort_keys = [
+            ("commits", SortKey::Commits),
+            ("files", SortKey::Files),
+            ("insertions", SortKey::Insertions),
+            ("deletions", SortKey::Deletions),
+            ("net", SortKey::Net),
+            ("churn", SortKey::Churn),
+            ("surviving", SortKey::Surviving),
+        ];
+
+        for (arg_val, expected_key) in sort_keys {
+            let args = Args::try_parse_from(["git-repostats", "--sort", arg_val])
+                .unwrap_or_else(|_| panic!("Failed to parse --sort {arg_val}"));
+            assert_eq!(args.sort, Some(expected_key));
+        }
+
+        let err = Args::try_parse_from(["git-repostats", "--sort", "unknown_key"]);
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn test_reverse_flag() {
+        let args = Args::try_parse_from(["git-repostats", "--reverse"])
+            .expect("Failed to parse --reverse");
+        assert!(args.reverse);
+    }
+
+    #[test]
+    fn test_limit_arg() {
+        let args_all = Args::try_parse_from(["git-repostats", "--limit", "all"])
+            .expect("Failed to parse --limit all");
+        assert_eq!(args_all.limit, Limit::All);
+
+        let args_count =
+            Args::try_parse_from(["git-repostats", "-l", "25"]).expect("Failed to parse -l 25");
+        assert_eq!(args_count.limit, Limit::Count(25));
+
+        assert!(Args::try_parse_from(["git-repostats", "--limit", "0"]).is_err());
+        assert!(Args::try_parse_from(["git-repostats", "--limit", "-10"]).is_err());
+        assert!(Args::try_parse_from(["git-repostats", "--limit", "invalid"]).is_err());
+    }
+
+    #[test]
+    fn test_silent_progress_flag() {
+        let args_short = Args::try_parse_from(["git-repostats", "-s"]).expect("Failed to parse -s");
+        assert!(args_short.silent_progress);
+
+        let args_long = Args::try_parse_from(["git-repostats", "--silent-progress"])
+            .expect("Failed to parse --silent-progress");
+        assert!(args_long.silent_progress);
+    }
+
+    #[test]
+    fn test_format_arg() {
+        let formats = [
+            ("table", OutputFormat::Table),
+            ("json", OutputFormat::Json),
+            ("csv", OutputFormat::Csv),
+            ("yaml", OutputFormat::Yaml),
+            ("markdown", OutputFormat::Markdown),
+        ];
+
+        for (name, expected_fmt) in formats {
+            let args = Args::try_parse_from(["git-repostats", "--format", name])
+                .unwrap_or_else(|_| panic!("Failed to parse --format {name}"));
+            assert_eq!(args.format, expected_fmt);
+        }
+
+        let err = Args::try_parse_from(["git-repostats", "--format", "xml"]);
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn test_output_arg() {
+        let args = Args::try_parse_from(["git-repostats", "--output", "stats.json"])
+            .expect("Failed to parse --output");
+        assert_eq!(args.output, Some(PathBuf::from("stats.json")));
+    }
+
+    #[test]
+    fn test_since_until_args() {
+        let args = Args::try_parse_from([
+            "git-repostats",
+            "--since",
+            "2024-01-01",
+            "--until",
+            "2024-12-31",
+        ])
+        .expect("Failed to parse --since and --until");
+
+        assert_eq!(args.since, Some("2024-01-01".to_string()));
+        assert_eq!(args.until, Some("2024-12-31".to_string()));
+    }
+
+    #[test]
+    fn test_show_author_arg() {
+        let show_options = [
+            ("name", ShowAuthor::Name),
+            ("email", ShowAuthor::Email),
+            ("both", ShowAuthor::Both),
+        ];
+
+        for (val, expected_show) in show_options {
+            let args = Args::try_parse_from(["git-repostats", "--show", val])
+                .unwrap_or_else(|_| panic!("Failed to parse --show {val}"));
+            assert_eq!(args.show, expected_show);
+        }
+
+        let err = Args::try_parse_from(["git-repostats", "--show", "other"]);
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn test_detection_and_whitespace_flags() {
+        let args = Args::try_parse_from(["git-repostats", "-M", "-C", "-w"])
+            .expect("Failed to parse short flags");
+        assert!(args.detect_moves);
+        assert!(args.detect_copies);
+        assert!(args.ignore_whitespace);
+
+        let args_long = Args::try_parse_from([
+            "git-repostats",
+            "--detect-moves",
+            "--detect-copies",
+            "--ignore-whitespace",
+        ])
+        .expect("Failed to parse long flags");
+        assert!(args_long.detect_moves);
+        assert!(args_long.detect_copies);
+        assert!(args_long.ignore_whitespace);
+    }
+
+    #[test]
+    fn test_merges_and_no_merges() {
+        let merges =
+            Args::try_parse_from(["git-repostats", "--merges"]).expect("Failed to parse --merges");
+        assert!(merges.merges);
+        assert!(!merges.no_merges);
+
+        let no_merges = Args::try_parse_from(["git-repostats", "--no-merges"])
+            .expect("Failed to parse --no-merges");
+        assert!(!no_merges.merges);
+        assert!(no_merges.no_merges);
+
+        // Conflicting flags
+        let conflict = Args::try_parse_from(["git-repostats", "--merges", "--no-merges"]);
+        assert!(conflict.is_err());
+    }
+
+    #[test]
+    fn test_ignore_rev_args() {
+        let args = Args::try_parse_from([
+            "git-repostats",
+            "--ignore-rev",
+            "abc1234",
+            "--ignore-rev",
+            "def5678",
+        ])
+        .expect("Failed to parse --ignore-rev");
+        assert_eq!(args.ignore_rev, vec!["abc1234", "def5678"]);
+    }
+
+    #[test]
+    fn test_ignore_revs_file_arg() {
+        let args = Args::try_parse_from(["git-repostats", "--ignore-revs-file", "Cargo.toml"])
+            .expect("Failed to parse valid ignore-revs-file");
+        assert_eq!(args.ignore_revs_file.len(), 1);
+
+        let err = Args::try_parse_from([
+            "git-repostats",
+            "--ignore-revs-file",
+            "nonexistent_revs.txt",
+        ]);
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn test_threads_arg() {
+        let args = Args::try_parse_from(["git-repostats", "--threads", "4"])
+            .expect("Failed to parse --threads");
+        assert_eq!(args.threads, 4);
+    }
+
+    #[test]
+    fn test_output_format_display() {
+        assert_eq!(OutputFormat::Table.to_string(), "Table");
+        assert_eq!(OutputFormat::Json.to_string(), "JSON");
+        assert_eq!(OutputFormat::Csv.to_string(), "CSV");
+        assert_eq!(OutputFormat::Yaml.to_string(), "YAML");
+        assert_eq!(OutputFormat::Markdown.to_string(), "Markdown");
+    }
+
+    #[test]
+    fn test_output_format_extension() {
+        assert_eq!(OutputFormat::Table.extension(), "txt");
+        assert_eq!(OutputFormat::Json.extension(), "json");
+        assert_eq!(OutputFormat::Csv.extension(), "csv");
+        assert_eq!(OutputFormat::Yaml.extension(), "yaml");
+        assert_eq!(OutputFormat::Markdown.extension(), "md");
+    }
+
+    #[test]
+    fn test_sort_key_display() {
+        assert_eq!(SortKey::Commits.to_string(), "Commits");
+        assert_eq!(SortKey::Files.to_string(), "Files");
+        assert_eq!(SortKey::Insertions.to_string(), "Insertions");
+        assert_eq!(SortKey::Deletions.to_string(), "Deletions");
+        assert_eq!(SortKey::Net.to_string(), "Net");
+        assert_eq!(SortKey::Churn.to_string(), "Churn");
+        assert_eq!(SortKey::Surviving.to_string(), "Surviving");
+    }
+
+    #[test]
+    fn test_limit_display() {
+        assert_eq!(Limit::All.to_string(), "All");
+        assert_eq!(Limit::Count(10).to_string(), "10");
+        assert_eq!(Limit::Count(0).to_string(), "0");
     }
 }

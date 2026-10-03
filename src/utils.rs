@@ -249,3 +249,311 @@ pub fn output_path_for_repo(path: &Path, repo_name: &str) -> PathBuf {
 
     parent.join(filename)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    #[test]
+    fn test_validate_git_dir_valid() {
+        let res = validate_git_dir(".");
+        assert!(res.is_ok());
+        let path = res.unwrap();
+        assert!(path.is_dir());
+        assert!(path.join(".git").exists());
+    }
+
+    #[test]
+    fn test_validate_git_dir_nonexistent() {
+        let res = validate_git_dir("non_existent_directory_for_tests");
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn test_validate_git_dir_not_a_directory() {
+        let res = validate_git_dir("Cargo.toml");
+        assert!(res.is_err());
+        let err = res.unwrap_err();
+        assert!(err.contains("not a directory"));
+    }
+
+    #[test]
+    fn test_validate_git_dir_not_a_git_repo() {
+        let temp_dir = std::env::temp_dir().join("test_repostats_not_git_repo");
+        let _ = std::fs::create_dir_all(&temp_dir);
+
+        let res = validate_git_dir(temp_dir.to_str().unwrap());
+        let _ = std::fs::remove_dir_all(&temp_dir);
+
+        assert!(res.is_err());
+        let err = res.unwrap_err();
+        assert!(err.contains("not a git repository") || err.contains("missing .git"));
+    }
+
+    #[test]
+    fn test_validate_ignore_revs_file_valid() {
+        let res = validate_ignore_revs_file("Cargo.toml");
+        assert!(res.is_ok());
+        let path = res.unwrap();
+        assert!(path.is_file());
+    }
+
+    #[test]
+    fn test_validate_ignore_revs_file_nonexistent() {
+        let res = validate_ignore_revs_file("non_existent_file_for_tests.txt");
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn test_validate_ignore_revs_file_directory() {
+        let res = validate_ignore_revs_file("src");
+        assert!(res.is_err());
+        let err = res.unwrap_err();
+        assert!(err.contains("not a file"));
+    }
+
+    #[test]
+    fn test_validate_output_extension_valid() {
+        let cases = [
+            ("out.txt", OutputFormat::Table),
+            ("out.json", OutputFormat::Json),
+            ("out.csv", OutputFormat::Csv),
+            ("out.yaml", OutputFormat::Yaml),
+            ("out.md", OutputFormat::Markdown),
+        ];
+
+        for (filename, format) in cases {
+            let res = validate_output_extension(Path::new(filename), format);
+            assert!(
+                res.is_ok(),
+                "Expected Ok for {filename} with format {format:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_validate_output_extension_case_insensitive() {
+        assert!(validate_output_extension(Path::new("out.JSON"), OutputFormat::Json).is_ok());
+        assert!(validate_output_extension(Path::new("out.CSV"), OutputFormat::Csv).is_ok());
+    }
+
+    #[test]
+    fn test_validate_output_extension_missing_extension() {
+        let res = validate_output_extension(Path::new("out"), OutputFormat::Json);
+        assert!(matches!(res, Err(AppError::InvalidOutputExtension(_))));
+    }
+
+    #[test]
+    fn test_validate_output_extension_mismatched() {
+        let res = validate_output_extension(Path::new("out.txt"), OutputFormat::Json);
+        assert!(matches!(res, Err(AppError::InvalidOutputExtension(_))));
+    }
+
+    #[test]
+    fn test_parse_metrics() {
+        // Deduplication
+        let parsed = parse_metrics(&[Metrics::Commits, Metrics::Commits, Metrics::Files]);
+        assert_eq!(parsed.len(), 2);
+        assert!(parsed.contains(&Metrics::Commits));
+        assert!(parsed.contains(&Metrics::Files));
+
+        // Metrics::All expansion
+        let parsed_all = parse_metrics(&[Metrics::All]);
+        assert_eq!(
+            parsed_all,
+            vec![
+                Metrics::Commits,
+                Metrics::Files,
+                Metrics::History,
+                Metrics::Current,
+            ]
+        );
+
+        let parsed_with_all = parse_metrics(&[Metrics::Commits, Metrics::All]);
+        assert_eq!(
+            parsed_with_all,
+            vec![
+                Metrics::Commits,
+                Metrics::Files,
+                Metrics::History,
+                Metrics::Current,
+            ]
+        );
+
+        // Empty
+        let empty = parse_metrics(&[]);
+        assert!(empty.is_empty());
+    }
+
+    #[test]
+    fn test_parse_limit() {
+        assert_eq!(parse_limit("all").unwrap(), Limit::All);
+        assert_eq!(parse_limit("10").unwrap(), Limit::Count(10));
+        assert_eq!(parse_limit("1").unwrap(), Limit::Count(1));
+
+        assert!(parse_limit("0").is_err());
+        assert!(parse_limit("-5").is_err());
+        assert!(parse_limit("abc").is_err());
+    }
+
+    #[test]
+    fn test_push_opt_arg() {
+        let mut cmd = Command::new("git");
+        push_opt_arg(&mut cmd, "--branch", Some("main"));
+        let args: Vec<&str> = cmd.get_args().map(|s| s.to_str().unwrap()).collect();
+        assert_eq!(args, vec!["--branch", "main"]);
+
+        let mut cmd_none = Command::new("git");
+        push_opt_arg(&mut cmd_none, "--branch", None);
+        assert_eq!(cmd_none.get_args().count(), 0);
+    }
+
+    #[test]
+    fn test_push_flag() {
+        let mut cmd_enabled = Command::new("git");
+        push_flag(&mut cmd_enabled, "-M", true);
+        let args: Vec<&str> = cmd_enabled
+            .get_args()
+            .map(|s| s.to_str().unwrap())
+            .collect();
+        assert_eq!(args, vec!["-M"]);
+
+        let mut cmd_disabled = Command::new("git");
+        push_flag(&mut cmd_disabled, "-M", false);
+        assert_eq!(cmd_disabled.get_args().count(), 0);
+    }
+
+    #[test]
+    fn test_check_output() {
+        // Empty argv error
+        let empty_res = check_output(&[]);
+        assert!(empty_res.is_err());
+
+        // Successful execution
+        let ok_res = check_output(&["git", "--version"]);
+        assert!(ok_res.is_ok());
+        let stdout = ok_res.unwrap();
+        assert!(stdout.contains("git version"));
+
+        // Failing execution
+        let fail_res = check_output(&["git", "definitely-not-a-valid-command-12345"]);
+        assert!(fail_res.is_err());
+    }
+
+    #[test]
+    fn test_get_sort_key_valid_user_sort() {
+        let args =
+            Args::try_parse_from(["git-repostats", "--metrics", "history", "--sort", "churn"])
+                .expect("Failed to parse args");
+        assert_eq!(get_sort_key(&args), Sort::Churn);
+
+        let args = Args::try_parse_from([
+            "git-repostats",
+            "--metrics",
+            "history",
+            "--sort",
+            "insertions",
+        ])
+        .expect("Failed to parse args");
+        assert_eq!(get_sort_key(&args), Sort::Insertions);
+    }
+
+    #[test]
+    fn test_get_sort_key_invalid_user_sort_fallback() {
+        // Insertions is not valid when only Commits metric is selected; should fallback to Commits
+        let args = Args::try_parse_from([
+            "git-repostats",
+            "--metrics",
+            "commits",
+            "--sort",
+            "insertions",
+        ])
+        .expect("Failed to parse args");
+        assert_eq!(get_sort_key(&args), Sort::Commits);
+    }
+
+    #[test]
+    fn test_get_sort_key_defaults() {
+        let defaults = [
+            ("commits", Sort::Commits),
+            ("files", Sort::Files),
+            ("history", Sort::Churn),
+            ("current", Sort::Surviving),
+            ("all", Sort::Surviving),
+        ];
+
+        for (metric, expected_sort) in defaults {
+            let args = Args::try_parse_from(["git-repostats", "--metrics", metric])
+                .unwrap_or_else(|_| panic!("Failed to parse metric {metric}"));
+            assert_eq!(get_sort_key(&args), expected_sort);
+        }
+    }
+
+    #[test]
+    fn test_sort_value() {
+        let stats = AuthorStats {
+            commits: Some(15),
+            files: Some(7),
+            surviving: Some(120),
+            ins: Some(250),
+            del: Some(50),
+            net: Some(200),
+            churn: Some(300),
+        };
+
+        assert_eq!(sort_value(&stats, Sort::Commits), 15);
+        assert_eq!(sort_value(&stats, Sort::Files), 7);
+        assert_eq!(sort_value(&stats, Sort::Surviving), 120);
+        assert_eq!(sort_value(&stats, Sort::Insertions), 250);
+        assert_eq!(sort_value(&stats, Sort::Deletions), 50);
+        assert_eq!(sort_value(&stats, Sort::Net), 200);
+        assert_eq!(sort_value(&stats, Sort::Churn), 300);
+
+        // Negative net change
+        let neg_stats = AuthorStats {
+            net: Some(-45),
+            ..AuthorStats::default()
+        };
+        assert_eq!(sort_value(&neg_stats, Sort::Net), -45);
+
+        // Fallbacks for None values
+        let empty_stats = AuthorStats::default();
+        assert_eq!(sort_value(&empty_stats, Sort::Commits), 0);
+        assert_eq!(sort_value(&empty_stats, Sort::Files), 0);
+        assert_eq!(sort_value(&empty_stats, Sort::Surviving), 0);
+        assert_eq!(sort_value(&empty_stats, Sort::Insertions), 0);
+        assert_eq!(sort_value(&empty_stats, Sort::Deletions), 0);
+        assert_eq!(sort_value(&empty_stats, Sort::Net), 0);
+        assert_eq!(sort_value(&empty_stats, Sort::Churn), 0);
+    }
+
+    #[test]
+    fn test_fmt_number() {
+        assert_eq!(fmt_number(&Some(1234567usize)), "1,234,567");
+        assert_eq!(fmt_number(&Some(0usize)), "0");
+        assert_eq!(fmt_number::<usize>(&None), "");
+        assert_eq!(fmt_number(&Some(-12345i64)), "-12,345");
+    }
+
+    #[test]
+    fn test_output_path_for_repo() {
+        let path = Path::new("reports/summary.json");
+        assert_eq!(
+            output_path_for_repo(path, "my-repo"),
+            PathBuf::from("reports/summary-my-repo.json")
+        );
+
+        let path_no_ext = Path::new("reports/summary");
+        assert_eq!(
+            output_path_for_repo(path_no_ext, "my-repo"),
+            PathBuf::from("reports/summary-my-repo")
+        );
+
+        let path_root = Path::new("summary.csv");
+        assert_eq!(
+            output_path_for_repo(path_root, "project"),
+            PathBuf::from("summary-project.csv")
+        );
+    }
+}
